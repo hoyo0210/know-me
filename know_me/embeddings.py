@@ -1,3 +1,18 @@
+"""
+嵌入（Embedding）：把「可变长文本」映射为「固定维度的浮点向量」，供向量库建索引与检索。
+
+本模块在架构中的位置：
+- E01：写入时，Chroma 会调用包装后的 Embedder，为每条 chunk 计算向量并存盘。
+- E02（检索）：查询句也要走同一个模型，才能在同一向量空间里比「谁更近」。
+
+为何要有 FakeEmbedder：
+- 真实模型依赖 Ollama / GPU / 下载权重；CI 或初学时先用 fake 验证「加载→切分→写入」全链路。
+- fake 向量无语义：相似度搜索的结果没有业务意义，只能测管道是否通畅。
+
+为何 OllamaEmbedder 逐条请求：
+- Ollama 的 /api/embeddings 常见用法是单条 prompt；批量优化可后续再加（如并发或批处理 API）。
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -12,14 +27,20 @@ log = logging.getLogger(__name__)
 
 @runtime_checkable
 class Embedder(Protocol):
-    """嵌入后端：把多条文本映射为同维向量。"""
+    """嵌入后端协议：对上层屏蔽「到底是 Ollama 还是 fake」。"""
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """输入多条文本，返回等长的向量列表；每条向量维度必须一致。"""
         ...
 
 
 class OllamaEmbedder:
-    """通过 Ollama HTTP API 调用本地嵌入模型（对齐 PRD：Qwen3 Embedding GGUF 可先注册为同名 Modelfile）。"""
+    """
+    通过 Ollama HTTP API 调用本地嵌入模型。
+
+    请求体与官方示例一致：POST /api/embeddings，JSON 含 model 与 prompt。
+    返回 JSON 中的 embedding 即 float 列表；维度由模型决定（与集合创建时绑定）。
+    """
 
     def __init__(self, base_url: str, model: str) -> None:
         self._base = base_url.rstrip("/")
@@ -43,7 +64,13 @@ class OllamaEmbedder:
 
 
 class FakeEmbedder:
-    """无外部依赖的伪向量：仅用于联调管道与无 Ollama 环境；语义检索不可用。"""
+    """
+    确定性伪向量：同一字符串每次得到相同向量；不同字符串一般正交性/距离无真实语义。
+
+    实现要点：
+    - 用 SHA-256 把文本变成字节种子，再展开为 dim 维浮点向量。
+    - L2 归一化：使向量落在我们常用「余弦相似度」几何直觉上（模长为 1）。
+    """
 
     def __init__(self, dim: int = 768) -> None:
         self._dim = dim
@@ -56,13 +83,13 @@ class FakeEmbedder:
             buf = (h * (need_bytes // len(h) + 1))[:need_bytes]
             ints = [int.from_bytes(buf[i : i + 4], "little") for i in range(0, need_bytes, 4)]
             vec = [((x % 2000) - 1000) / 1000.0 for x in ints]
-            # L2 归一化，便于与余弦距离习惯一致
             norm = math.sqrt(sum(v * v for v in vec)) or 1.0
             vecs.append([v / norm for v in vec])
         return vecs
 
 
 def get_embedder(backend: str, *, ollama_base_url: str, ollama_model: str, fake_dim: int) -> Embedder:
+    """工厂：按字符串选择具体嵌入实现（扩展新后端时在此加分支）。"""
     b = backend.lower().strip()
     if b == "ollama":
         log.info("嵌入后端：Ollama model=%s base=%s", ollama_model, ollama_base_url)
