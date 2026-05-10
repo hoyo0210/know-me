@@ -1,0 +1,11 @@
+# 本地环境与构建
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 索引与密钥（E01 默认 Chroma 持久化路径）
+data/chroma/
+.env
