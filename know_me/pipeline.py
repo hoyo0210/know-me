@@ -9,6 +9,9 @@ E01 编排层：把 loader、splitter、embedder、chroma 串成一次完整的�
 
 注意：当前实现先把「所有 chunk」收集到内存再一次性 upsert；
 语料极大时可改为边遍历边分批写入，降低峰值内存（后续优化项）。
+
+与 E02 的关系：本管道写入的 Chroma 集合与嵌入模型，由 `retrieval.retrieve` 以相同路径与
+`build_embedder(settings)` 再次打开；改嵌入模型后请对索引 `--reset` 重建。
 """
 
 from __future__ import annotations

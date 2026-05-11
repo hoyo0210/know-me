@@ -1,7 +1,14 @@
 """
 E02 — KM-202：基于检索片段的生成（证据约束）。
 
-流程：retrieve → 拼上下文 → 带系统提示调用 OpenAI 兼容 Chat → 返回正文 + 引用结构（便于日志与后续 API）。
+编排顺序（建议对照阅读 `retrieval` → `llm`）：
+1. `retrieve`：拿到 Top-K `RetrievedChunk`。
+2. 若为空：**不调用** LLM，直接返回固定拒答文案（避免模型用预训练知识「瞎补」）。
+3. `retrieved_to_citation_block`：把片段变成带编号与 source 的纯文本证据块。
+4. `chat_complete`：system = `RAG_SYSTEM_PROMPT`，user = 问题 + 证据块；temperature 来自配置。
+5. 组装 `RAGAnswer`：`retrieved` 保留全量命中便于审计；`citations` 提供精简引用表。
+
+后续 E03（HTTP `/chat`）可原样调用 `answer_with_rag(settings, query)`，仅多一层会话与流式包装。
 """
 
 from __future__ import annotations
@@ -12,7 +19,7 @@ from know_me.llm import chat_complete
 from know_me.prompts import RAG_SYSTEM_PROMPT
 from know_me.retrieval import retrieve, retrieved_to_citation_block
 from know_me.settings import IndexSettings
-from know_me.types_rag import RAGAnswer, RetrievedChunk
+from know_me.types_rag import RAGAnswer
 
 log = logging.getLogger(__name__)
 

@@ -1,10 +1,14 @@
 """
 Know Me 运行时配置（E01 建索引 + E02 检索与生成）。
 
-嵌入与对话均走 **OpenAI 兼容** HTTP（同一 `KNOW_ME_OPENAI_BASE_URL` 下的 `/v1/embeddings` 与 `/v1/chat/completions`），
-便于 LM Studio、llama-server 等本地或网关统一部署。
+OpenAI 兼容网关（同一主机常见部署）
+------------------------------------
+- `KNOW_ME_OPENAI_BASE_URL`：须含 **`/v1`**，例如 `http://127.0.0.1:1234/v1`。
+- **嵌入**：`POST {base}/embeddings`，模型 `KNOW_ME_OPENAI_EMBED_MODEL`（建索引 + 检索问句必须一致）。
+- **对话**：`POST {base}/chat/completions`，模型 `KNOW_ME_OPENAI_CHAT_MODEL`（仅 RAG 生成需要）。
+- **鉴权**：`KNOW_ME_OPENAI_API_KEY`；LM Studio 若要求占位符，常见为 `lm-studio`；无鉴权可留空。
 
-各环境变量在 `IndexSettings` 字段旁用注释标出，便于对照 `.env` 或 systemd 配置。
+字段旁注释为对应环境变量名；复制仓库根目录 `.env.example` 为 `.env` 后按需填写。
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from pathlib import Path
 
 
 def _env_int(name: str, default: int) -> int:
+    """读整型环境变量；未设置或空串则返回 default。"""
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
         return default
@@ -22,6 +27,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _env_float(name: str, default: float) -> float:
+    """读浮点环境变量；未设置或空串则返回 default。"""
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
         return default
@@ -30,34 +36,39 @@ def _env_float(name: str, default: float) -> float:
 
 @dataclass(frozen=True)
 class IndexSettings:
-    """建索引、检索、RAG 共用的配置（CLI 与环境变量合并）。"""
+    """
+    建索引、检索、RAG 共用的配置（由 `IndexSettings.from_env` 与环境变量、CLI 路径选项合并）。
+
+    说明：类名仍为 IndexSettings 是历史原因；其中已包含 E02 所需字段，避免拆成多个 settings 文件。
+    """
 
     # KNOW_ME_CORPUS_ROOT（仅 build-index 使用；CLI --corpus-root 优先）
     corpus_root: Path
-    # KNOW_ME_CHROMA_PATH（CLI --chroma-path 优先）
+    # KNOW_ME_CHROMA_PATH（CLI --chroma-path 优先；检索与建索引必须指向同一目录）
     chroma_path: Path
     # KNOW_ME_CHUNK_SIZE / KNOW_ME_CHUNK_OVERLAP：切分窗口；PRD 建议约 512 / 50
     chunk_size: int
     chunk_overlap: int
-    # KNOW_ME_CHROMA_COLLECTION
+    # KNOW_ME_CHROMA_COLLECTION：Chroma 集合名
     collection_name: str
     # KNOW_ME_OPENAI_BASE_URL：须含 /v1，例如 http://127.0.0.1:1234/v1
     openai_base_url: str
-    # KNOW_ME_OPENAI_API_KEY
+    # KNOW_ME_OPENAI_API_KEY：Bearer Token；本地无鉴权可空
     openai_api_key: str
-    # KNOW_ME_OPENAI_EMBED_MODEL：嵌入模型 id（建索引与检索问句必须一致）
+    # KNOW_ME_OPENAI_EMBED_MODEL：嵌入模型 id（建索引与检索问句必须一致，否则语义检索无效）
     openai_embed_model: str
-    # KNOW_ME_OPENAI_EMBED_BATCH_SIZE
+    # KNOW_ME_OPENAI_EMBED_BATCH_SIZE：嵌入 API 每请求最多多少条文本
     openai_embed_batch_size: int
-    # KNOW_ME_OPENAI_CHAT_MODEL：对话模型 id（仅 `query` / RAG 生成需要）
+    # KNOW_ME_OPENAI_CHAT_MODEL：对话模型 id（know-me query 必填）
     openai_chat_model: str
-    # KNOW_ME_RAG_TOP_K：默认检索条数
+    # KNOW_ME_RAG_TOP_K：默认检索条数（向量近邻数量）
     rag_top_k: int
-    # KNOW_ME_LLM_TEMPERATURE
+    # KNOW_ME_LLM_TEMPERATURE：对话采样温度；RAG 建议偏低以增强对证据的忠实度
     llm_temperature: float
 
     @staticmethod
     def from_env(corpus_root: Path | None = None, chroma_path: Path | None = None) -> "IndexSettings":
+        """组装配置：CLI 传入的 corpus_root / chroma_path 优先于环境变量。"""
         root = corpus_root or Path(os.environ.get("KNOW_ME_CORPUS_ROOT", "corpus")).resolve()
         chroma = chroma_path or Path(os.environ.get("KNOW_ME_CHROMA_PATH", "data/chroma")).resolve()
         return IndexSettings(

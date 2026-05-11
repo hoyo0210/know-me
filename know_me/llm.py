@@ -1,7 +1,13 @@
 """
 OpenAI Chat Completions 兼容客户端（LM Studio / llama-server / 多数云端网关）。
 
-与 `embeddings.py` 共用同一 `KNOW_ME_OPENAI_BASE_URL`（/v1 根路径），仅路径改为 `/chat/completions`。
+在架构中的位置（E02）：
+- `embeddings.py` 负责把**文本**变成**向量**（同一向量空间内做相似度）。
+- 本模块负责把**带系统提示的多轮消息**发给**对话模型**，得到自然语言答案。
+
+与 `embeddings.py` 的关系：
+- 共用 `KNOW_ME_OPENAI_BASE_URL`（须以 `/v1` 结尾）与 `KNOW_ME_OPENAI_API_KEY`。
+- **模型名不同**：嵌入用 `KNOW_ME_OPENAI_EMBED_MODEL`，对话用 `KNOW_ME_OPENAI_CHAT_MODEL`（LM Studio 里常是两个不同模型）。
 """
 
 from __future__ import annotations
@@ -24,9 +30,11 @@ def chat_complete(
     timeout: float = 120.0,
 ) -> str:
     """
-    调用 `POST {base_url}/chat/completions`，返回 assistant 文本内容。
+    调用 `POST {base_url}/chat/completions`，返回**第一条** choice 的 assistant 文本。
 
-    `messages` 为 OpenAI 格式：`[{"role":"system","content":"..."}, ...]`。
+    参数说明：
+    - messages：OpenAI Chat 格式，通常包含 system（约束）与 user（问题 + 证据块）。
+    - temperature：采样温度；RAG 场景宜偏低以增强忠实度（默认 0.2，可用环境变量调）。
     """
     if not model.strip():
         raise ValueError("未配置对话模型名（KNOW_ME_OPENAI_CHAT_MODEL）")
@@ -43,6 +51,8 @@ def chat_complete(
         r = client.post(url, headers=headers, json=payload)
         r.raise_for_status()
         data = r.json()
+
+    # OpenAI 风格：choices[0].message.content 为助手回复正文
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError(f"对话接口返回异常：{data!r}")

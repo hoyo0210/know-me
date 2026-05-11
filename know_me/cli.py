@@ -2,7 +2,13 @@
 命令行入口：E01 `build-index`、E02 `query`（检索 + 生成）、`version`。
 
 入口点（见 pyproject.toml [project.scripts]）：
-- `know-me` / `know-me-index` 均指向本 Typer app。
+- `know-me` / `know-me-index` 均调用 `main()`（会先加载 `.env`，再进入 Typer）。
+
+环境变量加载（重要）：
+- `main()` 内先 `_load_dotenv()`：从**当前工作目录**向上查找 `.env` 并 `load_dotenv(override=False)`。
+- 因此你在仓库根目录执行 `know-me build-index` 时，根目录的 `.env` 会被读入；
+  已存在于**进程环境**的变量不会被覆盖（便于 CI 注入密钥）。
+- 若仍提示未配置 `KNOW_ME_OPENAI_EMBED_MODEL`，请确认：`.env` 路径、变量名拼写、或在 shell 里 `export` 后再运行。
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import typer
+from dotenv import load_dotenv
 
 from know_me.pipeline import build_index
 from know_me.rag_answer import answer_with_rag
@@ -22,8 +29,18 @@ from know_me.settings import IndexSettings
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="Know Me — E01/E02 CLI（索引 + RAG 问答）")
 
 
+def _load_dotenv() -> None:
+    """从当前工作目录向上查找 `.env` 并载入（不覆盖已在环境中的变量）。"""
+    here = Path.cwd().resolve()
+    for d in [here, *list(here.parents)[:16]]:
+        candidate = d / ".env"
+        if candidate.is_file():
+            load_dotenv(candidate, override=False)
+            return
+
+
 def _configure_logging(verbose: bool) -> None:
-    """stderr 打日志、stdout 留给统计结果，方便管道重定向。"""
+    """stderr 打日志；普通模式下回答正文走 stdout，便于管道重定向。"""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
@@ -40,9 +57,9 @@ def build_index_cmd(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """
-    构建索引：封装 IndexSettings.from_env + build_index。
+    E01：构建向量索引（加载 → 切分 → 嵌入 → Chroma）。
 
-    嵌入服务依赖环境变量 KNOW_ME_OPENAI_*（见 know_me/settings.py）；未配置模型名将失败并提示。
+    依赖：`KNOW_ME_OPENAI_EMBED_MODEL` 等（见 `know_me/settings.py`）。配置来自环境 + 本命令行选项。
     """
     _configure_logging(verbose)
     env = IndexSettings.from_env(corpus_root=corpus_root.resolve(), chroma_path=chroma_path.resolve())
@@ -50,7 +67,6 @@ def build_index_cmd(
         stats = build_index(env, reset=reset)
     except Exception as e:
         logging.getLogger(__name__).exception("索引构建失败：%s", e)
-        # Typer 非零退出码：shell 脚本可据此中断 CI
         raise typer.Exit(code=1) from e
     typer.echo(f"完成：{stats}")
 
@@ -65,10 +81,14 @@ def query_cmd(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """
-    E02：向量检索 + 基于片段的 LLM 回答（需 KNOW_ME_OPENAI_EMBED_MODEL 与 KNOW_ME_OPENAI_CHAT_MODEL）。
+    E02：向量检索 + 基于片段的 LLM 回答。
+
+    依赖：`KNOW_ME_OPENAI_EMBED_MODEL`（与建索引一致）+ `KNOW_ME_OPENAI_CHAT_MODEL`（对话模型）。
+    输出：`--json` 时 stdout 为完整 JSON；否则 stdout 仅正文，引用结构在 stderr。
     """
     _configure_logging(verbose)
     env = IndexSettings.from_env(corpus_root=corpus_root.resolve(), chroma_path=chroma_path.resolve())
+    # 尽早失败，避免进入 HTTP 后才报难懂的 4xx
     if not env.openai_embed_model.strip():
         typer.echo("错误：未设置 KNOW_ME_OPENAI_EMBED_MODEL。", err=True)
         raise typer.Exit(code=1)
@@ -98,6 +118,8 @@ def version_cmd() -> None:
 
 
 def main() -> None:
+    """setuptools 控制台入口：必须先加载 `.env`，再解析子命令。"""
+    _load_dotenv()
     app()
 
 

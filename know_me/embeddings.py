@@ -8,7 +8,8 @@
 
 本模块在架构中的位置：
 - E01：Chroma 写入时通过 EmbeddingFunction 回调本客户端
-- E02：用户问句嵌入必须与这里 **同一 base_url + model**，否则检索无效
+- E02：`retrieval.retrieve` 再次 `build_embedder` 并 `get_or_create_collection`，
+  用 `query_texts` 对问句嵌入；必须与建索引时 **同一 base_url + embed_model**，否则近邻无意义
 """
 
 from __future__ import annotations
@@ -21,6 +22,29 @@ import httpx
 from know_me.settings import IndexSettings
 
 log = logging.getLogger(__name__)
+
+_HTTP_ERR_BODY_MAX = 800
+
+
+def _http_error_detail(resp: httpx.Response) -> str:
+    """截取响应体便于排障（401/403 时常含具体原因）。"""
+    raw = (resp.text or "").strip()
+    if len(raw) > _HTTP_ERR_BODY_MAX:
+        return raw[:_HTTP_ERR_BODY_MAX] + " …"
+    return raw
+
+
+def _raise_embeddings_http(resp: httpx.Response) -> None:
+    """将非 2xx 转为带截断响应体与排障提示的 RuntimeError（便于区分鉴权/路径错误）。"""
+    if resp.is_success:
+        return
+    body = _http_error_detail(resp)
+    hint = (
+        "请核对 KNOW_ME_OPENAI_BASE_URL、KNOW_ME_OPENAI_API_KEY：须与服务端 OpenAI 兼容网关一致；"
+        "LM Studio 文档常用占位为 lm-studio（与 OpenAI(base_url=..., api_key='lm-studio') 等价）；"
+        "若服务端未开启鉴权，可将 KNOW_ME_OPENAI_API_KEY 留空。"
+    )
+    raise RuntimeError(f"嵌入接口 HTTP {resp.status_code} {resp.reason_phrase}。{hint} 响应体：{body or '(空)'}")
 
 
 @runtime_checkable
@@ -80,7 +104,7 @@ class OpenAICompatibleEmbedder:
                 # OpenAI 规范：input 可为 string 或 string[]；批量减少往返
                 payload: dict = {"model": self._model, "input": batch}
                 r = client.post(self._url(), headers=headers, json=payload)
-                r.raise_for_status()
+                _raise_embeddings_http(r)
                 data = r.json()
                 arr = data.get("data")
                 if not isinstance(arr, list) or not arr:
