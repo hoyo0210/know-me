@@ -5,7 +5,7 @@ Chroma 持久化封装：把「向量 + 原文 + metadata」写到本地目录�
 - PersistentClient(path=...)：在磁盘 path 下维护数据库文件；重启进程后索引仍在。
 - Collection（集合）：类似「一张表」，里面有 ids、documents、embeddings、metadatas。
 - embedding_function：告诉 Chroma「如何把 document 字符串变成向量」。
-  本项目中我们用 ChromaKnowMeEmbedding 包一层，内部再调用你的 OllamaEmbedder / FakeEmbedder。
+  本项目中我们用 ChromaKnowMeEmbedding 包一层，内部再调用 OpenAI 兼容的 Embedder。
 
 写入为何用 upsert 而非 add：
 - upsert：id 已存在则覆盖，不存在则插入；适合「重复构建同一语料」而不想先手动删库。
