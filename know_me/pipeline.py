@@ -17,7 +17,7 @@ import logging
 from typing import Any
 
 from know_me.chroma_store import add_chunks, get_client, get_or_create_collection, reset_collection
-from know_me.embeddings import get_embedder
+from know_me.embeddings import build_embedder
 from know_me.loaders import iter_markdown_documents
 from know_me.settings import IndexSettings
 from know_me.splitting import split_document
@@ -40,13 +40,8 @@ def build_index(settings: IndexSettings, *, reset: bool) -> dict[str, Any]:
     if reset:
         reset_collection(client, settings.collection_name)
 
-    # 2) 选择嵌入实现（fake / ollama），并创建带该嵌入函数的集合
-    embedder = get_embedder(
-        settings.embed_backend,
-        ollama_base_url=settings.ollama_base_url,
-        ollama_model=settings.ollama_embed_model,
-        fake_dim=settings.fake_embedding_dim,
-    )
+    # 2) OpenAI 兼容嵌入（LM Studio / llama-server 等），并创建带该嵌入函数的集合
+    embedder = build_embedder(settings)
     collection = get_or_create_collection(client, settings.collection_name, embedder)
 
     doc_count = 0

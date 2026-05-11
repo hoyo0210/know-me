@@ -39,25 +39,15 @@ def build_index_cmd(
     corpus_root: Path = typer.Option(Path("corpus"), "--corpus-root", help="语料根目录"),
     chroma_path: Path = typer.Option(Path("data/chroma"), "--chroma-path", help="Chroma 持久化目录"),
     reset: bool = typer.Option(False, "--reset", help="重建前删除已有集合"),
-    embed_backend: str | None = typer.Option(
-        None,
-        "--embed-backend",
-        help="覆盖环境变量 KNOW_ME_EMBED_BACKEND：ollama / fake",
-    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """
     构建索引：封装 IndexSettings.from_env + build_index。
 
-    embed_backend 若为 None，则完全遵循环境变量；若传入则临时覆盖（不修改进程外配置）。
+    嵌入服务依赖环境变量 KNOW_ME_OPENAI_*（见 know_me/settings.py）；未配置模型名将失败并提示。
     """
     _configure_logging(verbose)
     env = IndexSettings.from_env(corpus_root=corpus_root.resolve(), chroma_path=chroma_path.resolve())
-    if embed_backend is not None:
-        # frozen dataclass 的浅拷贝替换：只改 embed_backend 字段
-        from dataclasses import replace
-
-        env = replace(env, embed_backend=embed_backend)
     try:
         stats = build_index(env, reset=reset)
     except Exception as e:

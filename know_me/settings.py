@@ -1,11 +1,11 @@
 """
 索引构建相关的「运行时配置」。
 
-设计意图：
-- 默认值保证「克隆仓库 → 安装依赖 → 一条命令」能跑通（默认嵌入用 fake，不依赖 Ollama）
-- 部署到本机 / 服务器时，用环境变量改路径与模型名，无需改代码
+嵌入模型：
+- 仅支持 **OpenAI 兼容** 的 `POST /v1/embeddings`（LM Studio、llama-server 兼容模式、多数云端网关）。
+- 须配置 `KNOW_ME_OPENAI_EMBED_MODEL`；`KNOW_ME_OPENAI_BASE_URL` 默认指向本机 LM Studio 常见端口。
 
-各环境变量在 IndexSettings 字段旁用注释标出，便于对照 .env 或 systemd 配置。
+各环境变量在 IndexSettings 字段旁用注释标出，便于对照 `.env` 或 systemd 配置。
 """
 
 from __future__ import annotations
@@ -36,14 +36,14 @@ class IndexSettings:
     chunk_overlap: int
     # KNOW_ME_CHROMA_COLLECTION：同一机器多项目时可改成不同集合名
     collection_name: str
-    # KNOW_ME_OLLAMA_URL：Ollama 的 HTTP 根地址（嵌入与将来对话模型可能共用）
-    ollama_base_url: str
-    # KNOW_ME_OLLAMA_EMBED_MODEL：须与 `ollama list` 中名称一致（你本地拉好的 Qwen 嵌入）
-    ollama_embed_model: str
-    # KNOW_ME_EMBED_BACKEND：ollama=真实向量；fake=仅占位，无语义检索
-    embed_backend: str
-    # KNOW_ME_FAKE_EMBED_DIM：fake 后端向量维度；若切到 ollama 且维度不同，需 --reset 重建集合
-    fake_embedding_dim: int
+    # KNOW_ME_OPENAI_BASE_URL：须含 /v1 前缀，例如 http://127.0.0.1:1234/v1
+    openai_base_url: str
+    # KNOW_ME_OPENAI_API_KEY：本地 LM Studio 常为空；云端兼容网关按需填写
+    openai_api_key: str
+    # KNOW_ME_OPENAI_EMBED_MODEL：在服务端界面或 API 中显示的模型 id（必填）
+    openai_embed_model: str
+    # KNOW_ME_OPENAI_EMBED_BATCH_SIZE：单请求最多多少条文本（过大可能被服务端拒绝）
+    openai_embed_batch_size: int
 
     @staticmethod
     def from_env(corpus_root: Path | None = None, chroma_path: Path | None = None) -> "IndexSettings":
@@ -56,12 +56,8 @@ class IndexSettings:
             chunk_size=_env_int("KNOW_ME_CHUNK_SIZE", 512),
             chunk_overlap=_env_int("KNOW_ME_CHUNK_OVERLAP", 50),
             collection_name=os.environ.get("KNOW_ME_CHROMA_COLLECTION", "know_me_corpus"),
-            ollama_base_url=os.environ.get("KNOW_ME_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
-            ollama_embed_model=os.environ.get(
-                "KNOW_ME_OLLAMA_EMBED_MODEL",
-                "qwen3-embedding:4b",
-            ),
-            # 默认 fake：CI / 新手环境无需起 Ollama；上线前改为 ollama 并配置真实嵌入模型
-            embed_backend=os.environ.get("KNOW_ME_EMBED_BACKEND", "fake").lower(),
-            fake_embedding_dim=_env_int("KNOW_ME_FAKE_EMBED_DIM", 768),
+            openai_base_url=os.environ.get("KNOW_ME_OPENAI_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/"),
+            openai_api_key=os.environ.get("KNOW_ME_OPENAI_API_KEY", ""),
+            openai_embed_model=os.environ.get("KNOW_ME_OPENAI_EMBED_MODEL", "").strip(),
+            openai_embed_batch_size=_env_int("KNOW_ME_OPENAI_EMBED_BATCH_SIZE", 32),
         )
