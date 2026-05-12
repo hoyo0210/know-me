@@ -13,6 +13,8 @@ OpenAI 兼容网关（同一主机常见部署）
 E03（HTTP API）
 ---------------
 - `KNOW_ME_CHAT_HISTORY_MAX_TURNS`：默认 6。
+- `KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET`：发往对话网关的 `messages` 总长度粗估上限（JSON 字符量，含 system）；本地小上下文模型可调低（如 6000）。
+- `KNOW_ME_AGENT_TOOL_RESULT_MAX_CHARS`：单次 `search_personal_knowledge` 写入 tool 消息的正文上限，超出则截断。
 - `KNOW_ME_INGEST_API_KEY`：`POST /ingest` 必填的 Bearer 密钥；未设置则该路由不可用。
 
 E04（HR 初筛）
@@ -95,6 +97,10 @@ class IndexSettings:
     llm_temperature: float
     # KNOW_ME_CHAT_HISTORY_MAX_TURNS：E03 API 多轮会话保留的「轮」数（一轮 ≈ user + assistant 各一条）
     chat_history_max_turns: int
+    # KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET：Agent 发往 chat.completions 的 messages 粗估字符上限（防本地网关 context 溢出）
+    agent_context_char_budget: int
+    # KNOW_ME_AGENT_TOOL_RESULT_MAX_CHARS：检索 tool 回注正文最大字符数
+    agent_tool_result_max_chars: int
     # KNOW_ME_INGEST_API_KEY：E03 `POST /ingest` 的 Bearer 密钥；留空则禁用入库接口（返回 503）
     ingest_api_key: str
     # KNOW_ME_DISCLAIMER：E04 对外免责声明（API / CLI 透出；可写入系统提示外的页脚）
@@ -127,6 +133,8 @@ class IndexSettings:
             rag_top_k=_env_int("KNOW_ME_RAG_TOP_K", 5),
             llm_temperature=_env_float("KNOW_ME_LLM_TEMPERATURE", 0.2),
             chat_history_max_turns=max(1, _env_int("KNOW_ME_CHAT_HISTORY_MAX_TURNS", 6)),
+            agent_context_char_budget=max(4096, _env_int("KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET", 12000)),
+            agent_tool_result_max_chars=max(512, _env_int("KNOW_ME_AGENT_TOOL_RESULT_MAX_CHARS", 4800)),
             ingest_api_key=os.environ.get("KNOW_ME_INGEST_API_KEY", "").strip(),
             disclaimer_text=os.environ.get("KNOW_ME_DISCLAIMER", "").strip(),
             rag_hr_boost=_env_bool("KNOW_ME_RAG_HR_BOOST", True),

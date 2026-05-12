@@ -24,7 +24,9 @@ import typer
 from dotenv import load_dotenv
 
 from know_me.agent_chat import iter_agent_chat_events, run_agent_chat_blocking
+from know_me.prompts_agent import SESSION_OPENING_ASK_IDENTITY
 from know_me.eval_run import run_eval_report
+from know_me.job_intent import is_greeting_only_message
 from know_me.pipeline import build_index
 from know_me.rag_answer import RAGStreamSession, answer_with_rag
 from know_me.sessions import ChatSessionStore
@@ -120,7 +122,8 @@ def query_cmd(
             ans = answer_with_rag(env, question, top_k=top_k)
         else:
             _try_stdout_line_buffering()
-            typer.echo("「正在检索语料并连接模型，请稍候…」", err=True)
+            if not is_greeting_only_message(question.strip()):
+                typer.echo("「正在检索语料并连接模型，请稍候…」", err=True)
             session = RAGStreamSession(env, question, top_k=top_k)
             for part in session.iter_assistant_text():
                 sys.stdout.write(part)
@@ -176,6 +179,8 @@ def chat_cmd(
 
     store = ChatSessionStore(env.chat_history_max_turns)
     sid = store.ensure_session(None)
+    typer.echo(SESSION_OPENING_ASK_IDENTITY, err=True)
+    typer.echo("", err=True)
     typer.echo(
         f"多轮会话已开启（session_id={sid}，最多保留 {env.chat_history_max_turns} 轮）。\n"
         "输入 /exit 或 /quit 结束；Ctrl+D 退出。",
@@ -206,7 +211,14 @@ def chat_cmd(
                     if isinstance(m, str) and m.strip():
                         typer.echo(m, err=True)
 
-                result = run_agent_chat_blocking(env, hist, user_text, top_k=top_k, on_status=_chat_status)
+                result = run_agent_chat_blocking(
+                    env,
+                    hist,
+                    user_text,
+                    top_k=top_k,
+                    on_status=_chat_status,
+                    preface_shown=True,
+                )
                 if result.get("error"):
                     typer.echo(f"错误：{result['error']}", err=True)
                     continue
@@ -218,13 +230,13 @@ def chat_cmd(
                 clarify = result.get("clarify")
                 if clarify:
                     typer.echo(f"\n[澄清] {clarify}", err=True)
-                ans = str(result.get("answer") or "").strip()
+                ans = str(result.get("answer_stored") or result.get("answer") or "").strip()
                 if ans:
                     store.append_turn(sid, user_text, ans)
             else:
                 st: dict[str, object] = {"full": "", "err": False}
                 citations: list[dict] = []
-                for ev in iter_agent_chat_events(env, hist, user_text, top_k=top_k):
+                for ev in iter_agent_chat_events(env, hist, user_text, top_k=top_k, preface_shown=True):
                     t = ev.get("type")
                     if t == "status" and isinstance(ev.get("message"), str) and ev["message"].strip():
                         typer.echo(ev["message"], err=True)
@@ -236,7 +248,7 @@ def chat_cmd(
                         sys.stdout.write(ev["text"])
                         sys.stdout.flush()
                     elif t == "done":
-                        st["full"] = str(ev.get("answer") or "")
+                        st["full"] = str(ev.get("answer_stored") or ev.get("answer") or "")
                     elif t == "error":
                         st["err"] = True
                         typer.echo(f"\n错误：{ev.get('message', '')}\n", err=True)
@@ -293,7 +305,11 @@ def eval_cmd(
 
 @app.command("serve")
 def serve_cmd(
-    host: str = typer.Option("127.0.0.1", "--host", help="监听地址"),
+    host: str = typer.Option(
+        "0.0.0.0",
+        "--host",
+        help="监听地址；0.0.0.0 为所有网卡（可用本机局域网 IP 访问），仅本机改为 127.0.0.1",
+    ),
     port: int = typer.Option(8000, "--port", help="监听端口"),
     reload: bool = typer.Option(False, "--reload", help="开发热重载"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
@@ -301,6 +317,7 @@ def serve_cmd(
     """
     E03：启动 HTTP 服务（`GET /health`、`POST /chat`、`POST /ingest`）。
 
+    Web 聊天界面与 API 同源：浏览器打开 `http://<host>:<port>/`。
     OpenAPI 交互文档：`http://<host>:<port>/docs`
     """
     _configure_logging(verbose)

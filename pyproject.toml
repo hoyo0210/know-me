@@ -26,3 +26,6 @@ know-me-index = "know_me.cli:main"
 
 [tool.setuptools]
 packages = ["know_me"]
+
+[tool.setuptools.package-data]
+know_me = ["web_ui/*.html"]

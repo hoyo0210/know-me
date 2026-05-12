@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Know Me</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <style>
+    :root {
+      /* 深底 + 青绿强调：对比足够、长时间阅读不累 */
+      --bg: #0e1217;
+      --surface: #161c24;
+      --border: #2a3340;
+      --text: #e8eef5;
+      --muted: #8b96a8;
+      --accent: #2dd4bf;
+      --user-bg: #0d9488;
+      --assistant-bg: #1a222e;
+      --code-bg: #0a0f14;
+      --error: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(120% 80% at 50% -20%, #152028 0%, var(--bg) 45%);
+      color: var(--text);
+      text-wrap: pretty;
+    }
+    @supports (height: 100dvh) {
+      html, body { height: 100dvh; }
+    }
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-height: 100%;
+      width: 100%;
+      max-width: 900px;
+      margin: 0 auto;
+      min-height: 0;
+      overflow: hidden;
+    }
+    @supports (height: 100dvh) {
+      .app { max-height: 100dvh; }
+    }
+    header {
+      flex-shrink: 0;
+      position: relative;
+      padding-top: calc(10px + constant(safe-area-inset-top));
+      padding-top: calc(10px + env(safe-area-inset-top, 0px));
+      padding-right: calc(16px + constant(safe-area-inset-right));
+      padding-right: calc(16px + env(safe-area-inset-right, 0px));
+      padding-bottom: 10px;
+      padding-left: calc(16px + constant(safe-area-inset-left));
+      padding-left: calc(16px + env(safe-area-inset-left, 0px));
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      min-height: 44px;
+      background: var(--surface);
+    }
+    .header-center {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(70%, calc(100% - 140px));
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-height: 1.35em;
+      line-height: 1.35;
+    }
+    header button {
+      background: transparent; color: var(--muted); border: 1px solid var(--border);
+      padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 0.8rem;
+    }
+    header button:hover {
+      color: var(--text);
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    #messages {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      padding-top: 16px;
+      padding-bottom: 16px;
+      padding-left: calc(16px + constant(safe-area-inset-left));
+      padding-left: calc(16px + env(safe-area-inset-left, 0px));
+      padding-right: calc(16px + constant(safe-area-inset-right));
+      padding-right: calc(16px + env(safe-area-inset-right, 0px));
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .msg { display: flex; flex-direction: column; max-width: 92%; animation: fade 0.2s ease; }
+    @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .msg.user { align-self: flex-end; }
+    .msg.assistant { align-self: flex-start; }
+    .bubble {
+      padding: 12px 14px; border-radius: 14px; line-height: 1.55; font-size: 0.95rem;
+      word-break: break-word;
+    }
+    .msg.user .bubble {
+      background: var(--user-bg);
+      color: #f8fafc;
+      border-bottom-right-radius: 4px;
+      box-shadow: 0 1px 0 color-mix(in srgb, #000 25%, transparent);
+    }
+    .msg.assistant .bubble { background: var(--assistant-bg); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+    .msg.assistant .bubble.streaming {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    .msg .role { font-size: 0.7rem; color: var(--muted); margin-bottom: 4px; padding: 0 2px; }
+    .msg.assistant .bubble :is(p, ul, ol) { margin: 0.5em 0; }
+    .msg.assistant .bubble p:first-child { margin-top: 0; }
+    .msg.assistant .bubble p:last-child { margin-bottom: 0; }
+    .msg.assistant .bubble pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      padding: 10px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+    }
+    .msg.assistant .bubble code { font-family: ui-monospace, monospace; font-size: 0.88em; }
+    .typing-placeholder { color: var(--muted); font-style: italic; }
+    footer {
+      flex-shrink: 0;
+      padding-top: 12px;
+      padding-right: calc(16px + constant(safe-area-inset-right));
+      padding-right: calc(16px + env(safe-area-inset-right, 0px));
+      padding-bottom: calc(16px + constant(safe-area-inset-bottom));
+      padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+      padding-left: calc(16px + constant(safe-area-inset-left));
+      padding-left: calc(16px + env(safe-area-inset-left, 0px));
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .composer {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: stretch;
+    }
+    .composer textarea {
+      width: 100%;
+      min-height: 44px;
+      max-height: 160px;
+      resize: none;
+      overflow-y: auto;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.95rem;
+      line-height: 1.45;
+    }
+    .composer-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-shrink: 0;
+      padding-top: 2px;
+    }
+    .composer textarea:focus { outline: none; border-color: var(--accent); }
+    .composer button#send {
+      flex-shrink: 0;
+      min-height: 44px;
+      min-width: 72px;
+      padding: 10px 18px;
+      border-radius: 12px;
+      border: 1px solid color-mix(in srgb, var(--accent) 55%, #0f172a);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, #fff) 0%, var(--accent) 100%);
+      color: #042f2e;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.9rem;
+      box-shadow: 0 1px 0 color-mix(in srgb, #fff 22%, transparent);
+    }
+    .composer button#send:hover:not(:disabled) {
+      filter: brightness(1.06);
+      border-color: color-mix(in srgb, var(--accent) 70%, #0f172a);
+    }
+    .composer button#send:active:not(:disabled) {
+      filter: brightness(0.96);
+      transform: translateY(1px);
+    }
+    .composer button#send:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      filter: none;
+      transform: none;
+    }
+    header button:focus-visible,
+    .composer button#send:focus-visible,
+    .composer textarea:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
+    .footer-brand {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+    }
+    .footer-brand h1 {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+    .footer-brand .meta { font-size: 0.75rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="header-center" id="statusBar" title=""></div>
+      <div class="header-right">
+        <button type="button" id="newChat">新对话</button>
+      </div>
+    </header>
+    <div id="messages"></div>
+    <footer>
+      <div class="composer">
+        <textarea
+          id="input"
+          rows="2"
+          placeholder="输入消息…（Enter 发送，Shift+Enter 换行）"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+        ></textarea>
+        <div class="composer-bar">
+          <div class="footer-brand">
+            <h1>Know Me</h1>
+            <div class="meta" id="versionMeta">加载中…</div>
+          </div>
+          <button type="button" id="send">发送</button>
+        </div>
+      </div>
+      <div class="error-toast" id="errorToast" hidden></div>
+    </footer>
+  </div>
+  <script>window.__KM_HTTP_ROOT = %%KNOW_ME_HTTP_ROOT%%;</script>
+  <script>
+(function () {
+  function apiUrl(path) {
+    if (!path || path.charAt(0) !== "/") path = "/" + (path || "");
+    var root = typeof window.__KM_HTTP_ROOT === "string" ? String(window.__KM_HTTP_ROOT).trim() : "";
+    if (!root) return path;
+    return root.replace(/\/+$/, "") + path;
+  }
+  const LS_KEY = "know_me_session_id";
+  const messagesEl = document.getElementById("messages");
+  const inputEl = document.getElementById("input");
+  const sendBtn = document.getElementById("send");
+  const statusBar = document.getElementById("statusBar");
+  const versionMeta = document.getElementById("versionMeta");
+  const errorToast = document.getElementById("errorToast");
+  const newChatBtn = document.getElementById("newChat");
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderMarkdown(text) {
+    if (typeof marked === "undefined" || typeof DOMPurify === "undefined") return escapeHtml(text);
+    try {
+      const raw = marked.parse(text, { breaks: true, gfm: true });
+      return DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } });
+    } catch (_) {
+      return escapeHtml(text);
+    }
+  }
+
+  function resetInput() {
+    function wipe() {
+      inputEl.value = "";
+      inputEl.defaultValue = "";
+    }
+    wipe();
+    try {
+      inputEl.style.removeProperty("height");
+      inputEl.style.height = "auto";
+      inputEl.rows = 2;
+    } catch (_) {}
+    try {
+      inputEl.setSelectionRange(0, 0);
+    } catch (_) {}
+    // 中文等 IME 可能在清空后异步再写入；微任务 / 帧末再清一次，避免「首条发送后框里仍留着字」
+    queueMicrotask(wipe);
+    requestAnimationFrame(function () {
+      wipe();
+      requestAnimationFrame(wipe);
+    });
+  }
+
+  function setStatus(text) {
+    const t = text || "";
+    statusBar.textContent = t;
+    statusBar.title = t;
+  }
+
+  function getSessionId() {
+    return localStorage.getItem(LS_KEY) || null;
+  }
+  function setSessionId(id) {
+    if (id) localStorage.setItem(LS_KEY, id);
+    else localStorage.removeItem(LS_KEY);
+  }
+
+  function showError(msg) {
+    errorToast.textContent = msg;
+    errorToast.hidden = !msg;
+  }
+
+  function appendUserBubble(text) {
+    const wrap = document.createElement("div");
+    wrap.className = "msg user";
+    wrap.innerHTML = '<div class="role">你</div><div class="bubble">' + escapeHtml(text) + "</div>";
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return wrap;
+  }
+
+  function appendAssistantShell() {
+    const wrap = document.createElement("div");
+    wrap.className = "msg assistant";
+    const inner = document.createElement("div");
+    inner.className = "bubble streaming";
+    inner.innerHTML = '<span class="typing-placeholder">…</span>';
+    wrap.innerHTML = '<div class="role">Know Me</div>';
+    wrap.appendChild(inner);
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return { wrap, bubble: inner };
+  }
+
+  function appendAssistantStatic(text) {
+    const wrap = document.createElement("div");
+    wrap.className = "msg assistant";
+    wrap.innerHTML =
+      '<div class="role">Know Me</div><div class="bubble">' +
+      renderMarkdown(text || "") +
+      "</div>";
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function finishAssistantBubble(bubble, text) {
+    bubble.classList.remove("streaming");
+    bubble.innerHTML = renderMarkdown(text || "（无正文）");
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  async function parseSseStream(response, onEvent) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        block.split("\n").forEach(function (line) {
+          if (line.startsWith("data:")) {
+            const payload = line.slice(5).trimStart();
+            if (payload === "[DONE]") return;
+            try {
+              onEvent(JSON.parse(payload));
+            } catch (e) {
+              console.warn("SSE parse", e);
+            }
+          }
+        });
+      }
+    }
+    if (buffer.trim()) {
+      buffer.split("\n").forEach(function (line) {
+        if (line.startsWith("data:")) {
+          const payload = line.slice(5).trimStart();
+          try {
+            onEvent(JSON.parse(payload));
+          } catch (_) {}
+        }
+      });
+    }
+  }
+
+  let busy = false;
+  /** 已通过 POST /session 展示开场，首条 POST /chat 须带 preface_shown，避免 SSE 重复 opening */
+  let prefaceShownForServer = false;
+
+  async function ensureSessionOpening() {
+    try {
+      const res = await fetch(apiUrl("/session"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: getSessionId() }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || "HTTP " + res.status);
+      }
+      const j = await res.json();
+      if (j.session_id) setSessionId(j.session_id);
+      if (j.opening) {
+        appendAssistantStatic(j.opening);
+        prefaceShownForServer = true;
+      } else {
+        prefaceShownForServer = false;
+      }
+    } catch (e) {
+      showError("无法建立会话：" + String(e).slice(0, 240));
+      prefaceShownForServer = false;
+    }
+  }
+
+  async function sendMessage() {
+    const text = inputEl.value.trim();
+    if (!text || busy) return;
+    busy = true;
+    sendBtn.disabled = true;
+    showError("");
+    setStatus("");
+    resetInput();
+    appendUserBubble(text);
+    const { bubble } = appendAssistantShell();
+    let full = "";
+    let bubbleRaf = null;
+
+    function flushStreamingBubble() {
+      bubbleRaf = null;
+      if (!bubble.classList.contains("streaming")) return;
+      if (!full.trim()) {
+        bubble.innerHTML = '<span class="typing-placeholder">…</span>';
+      } else {
+        bubble.innerHTML = renderMarkdown(full);
+      }
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function scheduleStreamingUpdate() {
+      if (bubbleRaf != null) return;
+      bubbleRaf = requestAnimationFrame(flushStreamingBubble);
+    }
+
+    const body = {
+      session_id: getSessionId(),
+      message: text,
+      stream: true,
+      preface_shown: prefaceShownForServer,
+    };
+
+    try {
+      const res = await fetch(apiUrl("/chat"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        bubble.classList.remove("streaming");
+        bubble.innerHTML = "<p>请求失败（" + res.status + "）</p><pre>" + escapeHtml(errText.slice(0, 800)) + "</pre>";
+        return;
+      }
+      await parseSseStream(res, function (ev) {
+        if (ev.type === "session") {
+          if (ev.session_id) setSessionId(ev.session_id);
+          if (ev.disclaimer) setStatus(ev.disclaimer);
+          if (ev.opening && typeof ev.opening === "string") {
+            full += ev.opening;
+            scheduleStreamingUpdate();
+          }
+        } else if (ev.type === "status" && ev.message) {
+          setStatus(ev.message);
+        } else if (ev.type === "clarify" && ev.question) {
+          setStatus("澄清：" + ev.question);
+        } else if (ev.type === "delta" && ev.text) {
+          full += ev.text;
+          scheduleStreamingUpdate();
+        } else if (ev.type === "done") {
+          full = ev.answer || full;
+          prefaceShownForServer = false;
+          if (bubbleRaf != null) {
+            cancelAnimationFrame(bubbleRaf);
+            bubbleRaf = null;
+          }
+          finishAssistantBubble(bubble, full);
+          setStatus("");
+        } else if (ev.type === "error") {
+          if (bubbleRaf != null) {
+            cancelAnimationFrame(bubbleRaf);
+            bubbleRaf = null;
+          }
+          bubble.classList.remove("streaming");
+          bubble.innerHTML = "<p style=\"color:var(--error)\">" + escapeHtml(ev.message || "错误") + "</p>";
+        }
+      });
+      if (bubble.classList.contains("streaming")) {
+        if (bubbleRaf != null) {
+          cancelAnimationFrame(bubbleRaf);
+          bubbleRaf = null;
+        }
+        finishAssistantBubble(bubble, full);
+      }
+    } catch (e) {
+      bubble.classList.remove("streaming");
+      bubble.innerHTML = "<p style=\"color:var(--error)\">" + escapeHtml(String(e)) + "</p>";
+    } finally {
+      busy = false;
+      sendBtn.disabled = false;
+      resetInput();
+      inputEl.focus();
+    }
+  }
+
+  sendBtn.addEventListener("click", sendMessage);
+  inputEl.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    // 正在拼音/选字：勿拦截 Enter，否则无法上屏或会与清空逻辑打架
+    if (e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    sendMessage();
+  });
+
+  newChatBtn.addEventListener("click", async function () {
+    setSessionId(null);
+    messagesEl.innerHTML = "";
+    showError("");
+    prefaceShownForServer = false;
+    setStatus("已开始新会话。");
+    await ensureSessionOpening();
+    resetInput();
+    inputEl.focus();
+  });
+
+  fetch(apiUrl("/health"))
+    .then(function (r) {
+      return r.json();
+    })
+    .then(function (j) {
+      versionMeta.textContent = j.version ? "版本 " + j.version : "已连接";
+    })
+    .catch(function () {
+      versionMeta.textContent = "健康检查失败";
+    });
+
+  ensureSessionOpening().finally(function () {
+    inputEl.focus();
+  });
+})();
+  </script>
+</body>
+</html>

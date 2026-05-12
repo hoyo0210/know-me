@@ -124,6 +124,15 @@ def chat_complete_with_tools(
     }
     with httpx.Client(timeout=timeout) as client:
         r = client.post(url, headers=headers, json=payload)
+        if not r.is_success:
+            try:
+                log.warning(
+                    "chat_complete_with_tools HTTP %s body≈%s",
+                    r.status_code,
+                    (r.text or "")[:1200],
+                )
+            except Exception:
+                pass
         r.raise_for_status()
         data = r.json()
 

@@ -18,7 +18,7 @@ Know Me — 个人数字分身：E01 索引管道 + E02 RAG + E03 HTTP Agent API
 **E03（多轮对话 + Agent + 流式 API）**
 1. `sessions` — 进程内会话（KM-301）
 2. `prompts_agent` + `agent_chat` — 工具循环与 SSE 事件（KM-302 / KM-303）
-3. `api_app` — `GET /health`、`POST /chat`、`POST /ingest`（KM-304）
+3. `api_app` — `GET /`（Web 聊天）、`GET /health`、`POST /chat`、`POST /ingest`（KM-304）
 4. `cli` — `serve`
 
 **E04（HR 初筛）**
