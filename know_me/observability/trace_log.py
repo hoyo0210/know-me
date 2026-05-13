@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from know_me import __version__
-from know_me.settings import IndexSettings
+from know_me.core.settings import IndexSettings
 
 
 def emit_structured_trace(settings: IndexSettings, record: dict[str, Any]) -> None:

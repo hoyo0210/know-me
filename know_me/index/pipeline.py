@@ -19,11 +19,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from know_me.chroma_store import add_chunks, get_client, get_or_create_collection, reset_collection
-from know_me.embeddings import build_embedder
-from know_me.loaders import iter_markdown_documents
-from know_me.settings import IndexSettings
-from know_me.splitting import split_document
+from know_me.index.chroma_store import add_chunks, get_client, get_or_create_collection, reset_collection
+from know_me.index.embeddings import build_embedder
+from know_me.index.loaders import iter_markdown_documents
+from know_me.index.splitting import split_document
+from know_me.core.settings import IndexSettings
 
 log = logging.getLogger(__name__)
 

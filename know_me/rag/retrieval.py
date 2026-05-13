@@ -20,10 +20,10 @@ import logging
 import re
 from typing import Any
 
-from know_me.chroma_store import get_client, get_or_create_collection
-from know_me.embeddings import build_embedder
-from know_me.settings import IndexSettings
-from know_me.types_rag import RetrievedChunk
+from know_me.index.chroma_store import get_client, get_or_create_collection
+from know_me.index.embeddings import build_embedder
+from know_me.core.settings import IndexSettings
+from know_me.core.types_rag import RetrievedChunk
 
 log = logging.getLogger(__name__)
 
@@ -86,11 +86,13 @@ def retrieve(
     query: str,
     *,
     top_k: int | None = None,
+    use_hr_boost: bool | None = None,
 ) -> list[RetrievedChunk]:
     """
     对 `query` 做相似度检索，返回最多 `top_k` 条命中（含 metadata 与距离）。
 
     `top_k` 未传时使用 `settings.rag_top_k`。
+    `use_hr_boost` 为 None 时遵循 `settings.rag_hr_boost`；为 False 时本调用不做 HR 加权大批量拉取。
     """
     k = top_k if top_k is not None else settings.rag_top_k
     k = max(1, k)
@@ -98,7 +100,8 @@ def retrieve(
     if not q:
         return []
 
-    use_boost = settings.rag_hr_boost and is_hr_intent(q)
+    rag_ok = settings.rag_hr_boost if use_hr_boost is None else use_hr_boost
+    use_boost = rag_ok and is_hr_intent(q)
     n_fetch = min(_HR_FETCH_CAP, max(k * 3, k)) if use_boost else k
 
     # 与 pipeline.build_index 一致：同一 chroma 路径 + 集合名 + 嵌入实现

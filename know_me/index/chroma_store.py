@@ -25,7 +25,7 @@ import chromadb
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 
 if TYPE_CHECKING:
-    from know_me.embeddings import Embedder
+    from know_me.index.embeddings import Embedder
 
 log = logging.getLogger(__name__)
 

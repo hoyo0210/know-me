@@ -10,8 +10,9 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
-from know_me.retrieval import is_hr_intent
+from know_me.rag.retrieval import is_hr_intent
 
 # 整句匹配的短寒暄（整句命中即视为纯寒暄，避免「打个招呼」仍走模型）
 _GREETING_EXACT = frozenset(
@@ -33,7 +34,7 @@ _GREETING_RE = re.compile(
     re.I,
 )
 
-_JOB_WORDS = (
+_JOB_WORDS_BASE = (
     "求职",
     "找工作",
     "看机会",
@@ -91,8 +92,6 @@ _JOB_WORDS = (
     "研发",
     "架构",
     "交付",
-    "李昊旭",
-    "昊旭",
     "know me",
     "knowme",
     "数字分身",
@@ -100,6 +99,50 @@ _JOB_WORDS = (
     "知识库",
     "语料",
 )
+
+
+@lru_cache(maxsize=1)
+def _job_signal_words() -> tuple[str, ...]:
+    """求职向弱信号词：含 persona 中的 display_name / aliases。"""
+    from know_me.persona.loader import get_persona
+
+    p = get_persona()
+    base = _JOB_WORDS_BASE
+    seen = set(base)
+    extra: list[str] = []
+    for a in p.aliases:
+        t = (a or "").strip()
+        if t and t not in seen:
+            seen.add(t)
+            extra.append(t)
+    return base + tuple(extra)
+
+
+@lru_cache(maxsize=1)
+def _about_person_leading_pattern() -> re.Pattern[str]:
+    """匹配「在问谁」：含 persona 别名。"""
+    from know_me.persona.loader import get_persona
+
+    p = get_persona()
+    parts: list[str] = ["你", "您", "本人", "候选人"]
+    for a in p.aliases:
+        t = (a or "").strip()
+        if t and t not in parts:
+            parts.append(t)
+    inner = "|".join(re.escape(x) for x in parts)
+    return re.compile(rf"({inner})", re.I)
+
+
+@lru_cache(maxsize=1)
+def _what_is_spot_words() -> tuple[str, ...]:
+    """「什么是 X」里若出现这些词，更像在聊求职/本人而非纯百科。"""
+    base = ("简历", "岗位", "面试", "初筛", "你", "您", "本人")
+    from know_me.persona.loader import get_persona
+
+    p = get_persona()
+    extra = tuple(a for a in p.aliases if len(a) <= 16)
+    return base + extra
+
 
 _TECH_TERMS = (
     "java",
@@ -212,7 +255,7 @@ def greeting_fast_answer(query: str) -> str:
 
 
 def _about_person_career(q: str) -> bool:
-    if re.search(r"(你|您|本人|候选人|李昊旭|昊旭|Hoyo|hoyo)", q, re.I):
+    if _about_person_leading_pattern().search(q):
         if re.search(
             r"(项目|经历|履历|简历|工作|公司|离职|入职|薪资|期望|到岗|加班|远程|技术|栈|管理|团队|负责|几年|介绍|做过|"
             r"后端|前端|语言|熟悉|主要)",
@@ -253,7 +296,7 @@ def _generic_what_is_without_person(q: str) -> bool:
         return False
     if _about_person_career(q) or is_hr_intent(q):
         return False
-    if any(w in q for w in ("简历", "岗位", "面试", "初筛", "你", "您", "本人", "李昊旭", "昊旭")):
+    if any(w in q for w in _what_is_spot_words()):
         return False
     return len(s) <= 80
 
@@ -291,7 +334,7 @@ def should_retrieve_personal_corpus(query: str) -> bool:
         return True
     if _is_pure_greeting(q):
         return False
-    if any(w in q for w in _JOB_WORDS):
+    if any(w in q for w in _job_signal_words()):
         return True
     if _about_person_career(q):
         return True

@@ -21,7 +21,7 @@ from typing import Any, Iterator
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from know_me.types import RawDocument, TextChunk
+from know_me.core.types import RawDocument, TextChunk
 
 log = logging.getLogger(__name__)
 

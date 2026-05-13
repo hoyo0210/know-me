@@ -5,9 +5,9 @@ E03 — Agent 编排：工具循环 + 最终流式输出（KM-302 / KM-303）。
 0. **新会话**：开场白由 `POST /session` 或 SSE 首包 `session.opening` 下发（不经 LLM）；`iter_agent_chat_events` 仅把开场注入 LLM 上下文。`preface_shown=True` 表示客户端已展示过开场，不再重复推送。
 0b. **非新会话的纯寒暄**：本地固定短句，不跑工具首轮整包推理。
 1. 组装 **单条** `system`（新会话时把已展示的开场白并入 system，避免 `assistant` 夹在首条 `user` 前触发部分网关 400）+ 会话历史 + 本轮 `user`。
-2. 非流式 `chat_complete_with_tools` 循环直至无 `tool_calls` 或达到轮次上限。
+2. 非流式 `chat_complete_with_tools` 循环直至无 `tool_calls` 或达到轮次上限（前若干轮可在「快会话」模式下收紧 top_k、工具回注长度与最大工具轮次）。
 3. 执行 `search_personal_knowledge` → `retrieve` + 片段文本回注；`ask_user_clarify` → SSE 事件 + 简短 JSON 回注。
-4. 无工具调用后：**始终** `iter_chat_complete` 向 LLM 拉取真实 token 流（`delta` 与网关 SSE 同步）；若流式正文为空再回退到本轮非流式 `content`。
+4. 无工具调用后：若本轮非流式回复已有正文，则**不再**二次调用流式接口，仅本地切段产出 `delta`（避免重复推理导致首 token 极慢）；否则 `iter_chat_complete` 拉流；流式仍空则回退到本轮 `content`。
 5. 产出统一事件 dict，供 HTTP 层编码为 SSE。
 """
 
@@ -20,22 +20,32 @@ import uuid
 from collections.abc import Callable
 from typing import Any, Iterator
 
-from know_me.job_intent import (
+from know_me.rag.job_intent import (
     greeting_fast_answer,
     is_greeting_only_message,
     should_retrieve_personal_corpus,
 )
-from know_me.llm import chat_complete_with_tools, iter_chat_complete
-from know_me.prompts_agent import AGENT_SYSTEM_PROMPT, AGENT_TOOLS, SESSION_OPENING_ASK_IDENTITY
-from know_me.retrieval import citation_dicts_from_chunks, retrieve, retrieved_to_citation_block
-from know_me.settings import IndexSettings
-from know_me.trace_log import emit_structured_trace
+from know_me.rag.llm import chat_complete_with_tools, iter_chat_complete
+from know_me.agent.prompts_agent import AGENT_SYSTEM_PROMPT, AGENT_TOOLS, SESSION_OPENING_ASK_IDENTITY
+from know_me.rag.retrieval import citation_dicts_from_chunks, retrieve, retrieved_to_citation_block
+from know_me.core.settings import IndexSettings
+from know_me.observability.trace_log import emit_structured_trace
 
 log = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 10
 _AGENT_TOOLS_JSON_CHARS = len(json.dumps(AGENT_TOOLS, ensure_ascii=False))
 _MAX_USER_MSG_CHARS = 8000
+
+
+def _pseudo_stream_chunks(text: str, *, max_chars: int = 180) -> Iterator[str]:
+    """无二次 LLM 时，将已定稿正文切成多段 delta，便于前端仍按流式渲染。"""
+    if max_chars < 1:
+        max_chars = 1
+    s = text
+    for i in range(0, len(s), max_chars):
+        yield s[i : i + max_chars]
+
 
 def _approx_chat_payload_chars(messages: list[dict[str, Any]], tools_chars: int) -> int:
     """粗估发往 chat.completions 的 messages + tools JSON 字符量（与网关 token 限制单调相关）。"""
@@ -151,12 +161,43 @@ def iter_agent_chat_events(
     - `type=done`：最终 `answer`（当前气泡展示）；若与入库全文不同则另含 `answer_stored`（供服务端 `append_turn`，避免 Web 已单独展示开场时重复）
     - `type=error`：不可恢复错误说明
     """
-    k = top_k if top_k is not None else settings.rag_top_k
     mid = message_id or uuid.uuid4().hex
     t0 = time.perf_counter()
     usages_accum: list[dict[str, Any]] = []
     um = user_message.strip()
     hist_sl = _history_messages(history)
+    completed_pairs = len(hist_sl) // 2
+    in_fast_window = (
+        settings.agent_fast_session_turns > 0
+        and completed_pairs < settings.agent_fast_session_turns
+    )
+    k_base = top_k if top_k is not None else settings.rag_top_k
+    k = max(1, min(k_base, settings.agent_fast_top_k)) if in_fast_window else max(1, k_base)
+    tool_body_cap = (
+        min(settings.agent_tool_result_max_chars, settings.agent_fast_tool_result_max_chars)
+        if in_fast_window
+        else settings.agent_tool_result_max_chars
+    )
+    llm_timeout = (
+        float(settings.agent_fast_llm_timeout_sec)
+        if in_fast_window and settings.agent_fast_llm_timeout_sec is not None
+        else 120.0
+    )
+    max_tool_rounds_eff = (
+        min(MAX_TOOL_ROUNDS, settings.agent_fast_max_tool_rounds)
+        if in_fast_window
+        else MAX_TOOL_ROUNDS
+    )
+    if in_fast_window:
+        log.info(
+            "快会话窗口（第 %d/%d 轮内）：top_k=%s、tool 回注上限=%s、工具轮上限=%s、LLM 超时=%ss",
+            completed_pairs + 1,
+            settings.agent_fast_session_turns,
+            k,
+            tool_body_cap,
+            max_tool_rounds_eff,
+            llm_timeout,
+        )
     hist_empty = len(hist_sl) == 0
     session_prefix: str | None = None
 
@@ -237,8 +278,9 @@ def iter_agent_chat_events(
     messages = [{"role": "system", "content": system_body}]
     messages.extend(hist_for_llm)
     messages.append({"role": "user", "content": um_llm})
+    payload_chars = _approx_chat_payload_chars(messages, _AGENT_TOOLS_JSON_CHARS)
 
-    if _approx_chat_payload_chars(messages, _AGENT_TOOLS_JSON_CHARS) > settings.agent_context_char_budget:
+    if payload_chars > settings.agent_context_char_budget:
         yield {
             "type": "error",
             "message": (
@@ -258,7 +300,7 @@ def iter_agent_chat_events(
         "message": "正在连接模型并处理请求（工具推理可能需数秒）…",
     }
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for _ in range(max_tool_rounds_eff):
         turn = chat_complete_with_tools(
             base_url=settings.openai_base_url,
             api_key=settings.openai_api_key,
@@ -266,6 +308,7 @@ def iter_agent_chat_events(
             messages=messages,
             tools=AGENT_TOOLS,
             temperature=settings.llm_temperature,
+            timeout=llm_timeout,
         )
         if turn.usage:
             usages_accum.append(turn.usage)
@@ -317,14 +360,19 @@ def iter_agent_chat_events(
                         collected_citations = []
                         continue
                     yield {"type": "status", "phase": "retrieve", "message": "正在检索个人知识库…"}
-                    chunks = retrieve(settings, q, top_k=k)
+                    hr_kw: bool | None = (
+                        False
+                        if in_fast_window and settings.agent_fast_disable_hr_boost
+                        else None
+                    )
+                    chunks = retrieve(settings, q, top_k=k, use_hr_boost=hr_kw)
                     collected_citations = citation_dicts_from_chunks(chunks)
                     body = (
                         "（未检索到相关片段）"
                         if not chunks
                         else _clamp_tool_body(
                             retrieved_to_citation_block(chunks),
-                            settings.agent_tool_result_max_chars,
+                            tool_body_cap,
                         )
                     )
                     messages.append({"role": "tool", "tool_call_id": tid, "content": body})
@@ -357,15 +405,22 @@ def iter_agent_chat_events(
         yield {"type": "status", "phase": "stream", "message": "正在流式生成回答…"}
 
         buf: list[str] = []
-        for frag in iter_chat_complete(
-            base_url=settings.openai_base_url,
-            api_key=settings.openai_api_key,
-            model=settings.openai_chat_model,
-            messages=messages,
-            temperature=settings.llm_temperature,
-        ):
-            buf.append(frag)
-            yield {"type": "delta", "text": frag}
+        ready_text = (turn.content or "").strip()
+        if ready_text:
+            for frag in _pseudo_stream_chunks(ready_text):
+                buf.append(frag)
+                yield {"type": "delta", "text": frag}
+        else:
+            for frag in iter_chat_complete(
+                base_url=settings.openai_base_url,
+                api_key=settings.openai_api_key,
+                model=settings.openai_chat_model,
+                messages=messages,
+                temperature=settings.llm_temperature,
+                timeout=llm_timeout,
+            ):
+                buf.append(frag)
+                yield {"type": "delta", "text": frag}
         body = "".join(buf).strip()
         if not body and turn.content and turn.content.strip():
             body = turn.content.strip()
@@ -394,6 +449,7 @@ def iter_agent_chat_events(
                 "chat_model": settings.openai_chat_model,
                 "latency_total_ms": round((time.perf_counter() - t0) * 1000.0, 2),
                 "usage_tool_rounds": usages_accum or None,
+                "in_fast_session": in_fast_window,
             },
         )
         yield _done_event(
@@ -414,6 +470,7 @@ def iter_agent_chat_events(
             "error": "工具调用轮次超过上限，请简化问题后重试。",
             "latency_total_ms": round((time.perf_counter() - t0) * 1000.0, 2),
             "usage_tool_rounds": usages_accum or None,
+            "in_fast_session": in_fast_window,
         },
     )
     yield {"type": "error", "message": "工具调用轮次超过上限，请简化问题后重试。", "message_id": mid}

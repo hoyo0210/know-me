@@ -47,6 +47,24 @@ cp .env.example .env
 
 可选：通过环境变量 **`KNOW_ME_CORPUS_ROOT`** 指定语料根目录（未设置时默认为仓库下的 `corpus/`）。各 CLI 子命令仍可用 **`--corpus-root`** 覆盖。
 
+可选：通过 **`KNOW_ME_PERSONA_DIR`** 指定人设 Markdown 目录；未设置时默认为仓库根下的 **`persona/`**（本地自建，**默认 Git 忽略**）。克隆后从 **`persona.example/`** 复制或把该变量指向示例目录；字段说明见 **`persona.example/README.md`** 与下节。
+
+## 人设（persona）
+
+人设为 **`IDENTITY.md`** 与 **`SOUL.md`**，由本机维护；**`persona/` 默认不纳入 Git**（见 `.gitignore`），请勿将含真实身份与隐私边界的内容推送到远端。
+
+仓库内提供 **脱敏占位**（可提交）：**`persona.example/`**，说明见 **`persona.example/README.md`**。快速初始化本地人设目录：
+
+```bash
+mkdir -p persona
+cp persona.example/IDENTITY.md persona.example/SOUL.md persona/
+# 再按需编辑 persona/*.md
+```
+
+也可**不复制**，在环境中设置 **`KNOW_ME_PERSONA_DIR=persona.example`**（或在 `.env` 中配置）以直接加载示例文件、验证 RAG / Agent。
+
+`IDENTITY.md` 的 YAML 头中需设置 **`display_name`**（对外称呼），可选 **`aliases`**（用于问句弱信号）、**`session_opening`**（欢迎语，支持 `{owner_name}`）；正文描述「agent 是谁」。`SOUL.md` 描述三观与行为边界，正文中可用 **`{owner_name}`** 指代本人。
+
 ## 语料库（corpus）
 
 语料为 **Markdown**，由本机维护；**`corpus/` 默认不纳入 Git**（见 `.gitignore`），请勿把含隐私或授权范围外的正文推送到远端。
@@ -81,7 +99,7 @@ corpus/
 
 ### 正文与 YAML 头（可选）
 
-每个 `.md` 文件可在正文前使用 **YAML front matter**（`---` … `---`），正文写在第二个 `---` 之后。常用字段（均可省略；省略时部分字段会用文件修改日期或目录类型兜底，见 `know_me/splitting.py` 中 `build_chunk_metadata`）：
+每个 `.md` 文件可在正文前使用 **YAML front matter**（`---` … `---`），正文写在第二个 `---` 之后。常用字段（均可省略；省略时部分字段会用文件修改日期或目录类型兜底，见 `know_me/index/splitting.py` 中 `build_chunk_metadata`）：
 
 | 字段 | 说明 |
 |------|------|
@@ -135,7 +153,7 @@ know-me serve --host 127.0.0.1 --port 8000
 - **`POST /ingest`** — 触发索引构建（需配置 ingest 密钥时启用）  
 - **`POST /feedback`** — 可选反馈落盘（见 `.env.example`）  
 
-应用部署在**反向代理子路径**下时，请按 `.env.example` 与 `know_me/api_app.py` 文档字符串配置 `KNOW_ME_HTTP_BROWSER_PREFIX`（及必要时 `KNOW_ME_HTTP_ROOT_PATH`），避免前端请求打到错误路径。
+应用部署在**反向代理子路径**下时，请按 `.env.example` 与 `know_me/api/app.py` 文档字符串配置 `KNOW_ME_HTTP_BROWSER_PREFIX`（及必要时 `KNOW_ME_HTTP_ROOT_PATH`），避免前端请求打到错误路径。
 
 ## 评测（eval）
 
@@ -156,7 +174,7 @@ know-me eval --cases eval.example/cases.sample.jsonl
 know-me eval --cases eval/cases.jsonl
 ```
 
-可通过 **`--cases`** 指向任意路径，用 **`--out`** 指定报告 JSON 输出路径；详细字段见 `know_me/eval_run.py`。
+可通过 **`--cases`** 指向任意路径，用 **`--out`** 指定报告 JSON 输出路径；详细字段见 `know_me/observability/eval_run.py`。
 
 ## 仓库结构（节选）
 
@@ -165,6 +183,8 @@ know-me eval --cases eval/cases.jsonl
 | `know_me/` | Python 包：索引管道、RAG、Agent、API、CLI |
 | `corpus.example/` | 语料目录与脱敏占位 `.md`（可随仓库同步） |
 | `corpus/` | 个人语料（本地自建；默认 Git 忽略，不随仓库同步） |
+| `persona.example/` | 人设 Markdown 脱敏样例与说明（可随仓库同步） |
+| `persona/` | 人设 `IDENTITY.md` / `SOUL.md`（本地自建；默认 Git 忽略） |
 | `data/` | 向量库、反馈日志等（本地生成；默认 Git 忽略） |
 | `eval.example/` | 评测 JSONL 脱敏样例与说明（可随仓库同步） |
 | `eval/` | 评测 JSONL 与报告输出（本地；默认 Git 忽略） |

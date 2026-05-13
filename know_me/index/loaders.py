@@ -20,7 +20,7 @@ from typing import Iterator
 
 import frontmatter
 
-from know_me.types import CORPUS_KINDS, RawDocument
+from know_me.core.types import CORPUS_KINDS, RawDocument
 
 log = logging.getLogger(__name__)
 

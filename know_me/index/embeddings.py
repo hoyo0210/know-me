@@ -19,7 +19,7 @@ from typing import Protocol, Sequence, runtime_checkable
 
 import httpx
 
-from know_me.settings import IndexSettings
+from know_me.core.settings import IndexSettings
 
 log = logging.getLogger(__name__)
 

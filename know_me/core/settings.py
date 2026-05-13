@@ -15,6 +15,7 @@ E03（HTTP API）
 - `KNOW_ME_CHAT_HISTORY_MAX_TURNS`：默认 6。
 - `KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET`：发往对话网关的 `messages` 总长度粗估上限（JSON 字符量，含 system）；本地小上下文模型可调低（如 6000）。
 - `KNOW_ME_AGENT_TOOL_RESULT_MAX_CHARS`：单次 `search_personal_knowledge` 写入 tool 消息的正文上限，超出则截断。
+- **前 N 轮快会话（E03）**：`KNOW_ME_AGENT_FAST_SESSION_TURNS` 等；用于压缩检索与工具上下文以**尽量**缩短延迟；**整轮 <2s 仍依赖对话/嵌入网关与模型速度**，可选 `KNOW_ME_AGENT_FAST_LLM_TIMEOUT_SEC` 硬超时（超时则请求失败）。
 - `KNOW_ME_INGEST_API_KEY`：`POST /ingest` 必填的 Bearer 密钥；未设置则该路由不可用。
 
 E04（HR 初筛）
@@ -48,6 +49,14 @@ def _env_float(name: str, default: float) -> float:
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
         return default
+    return float(raw)
+
+
+def _env_optional_float(name: str) -> float | None:
+    """读浮点环境变量；未设置或空串则返回 None。"""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return None
     return float(raw)
 
 
@@ -113,12 +122,26 @@ class IndexSettings:
     feedback_enabled: bool
     # KNOW_ME_FEEDBACK_LOG：反馈 JSONL 文件路径
     feedback_log_path: Path
+    # KNOW_ME_AGENT_FAST_SESSION_TURNS：会话内前若干「已完成轮」之后的新提问仍视为快会话窗口（0=关闭）；一轮=user+assistant 各一条
+    agent_fast_session_turns: int
+    # KNOW_ME_AGENT_FAST_TOP_K：快会话窗口内检索 top_k 上限（与请求/默认取 min）
+    agent_fast_top_k: int
+    # KNOW_ME_AGENT_FAST_DISABLE_HR_BOOST：快会话窗口内是否关闭 HR 加权的大批量 n_fetch
+    agent_fast_disable_hr_boost: bool
+    # KNOW_ME_AGENT_FAST_TOOL_RESULT_MAX_CHARS：快会话窗口内 tool 回注正文上限（与 KNOW_ME_AGENT_TOOL_RESULT_MAX_CHARS 取 min 使用）
+    agent_fast_tool_result_max_chars: int
+    # KNOW_ME_AGENT_FAST_MAX_TOOL_ROUNDS：快会话窗口内工具循环最大轮次（与内置上限取 min）
+    agent_fast_max_tool_rounds: int
+    # KNOW_ME_AGENT_FAST_LLM_TIMEOUT_SEC：快会话窗口内 chat 请求超时秒数；未设置则与默认 120s 一致
+    agent_fast_llm_timeout_sec: float | None
 
     @staticmethod
     def from_env(corpus_root: Path | None = None, chroma_path: Path | None = None) -> "IndexSettings":
         """组装配置：CLI 传入的 corpus_root / chroma_path 优先于环境变量。"""
         root = corpus_root or Path(os.environ.get("KNOW_ME_CORPUS_ROOT", "corpus")).resolve()
         chroma = chroma_path or Path(os.environ.get("KNOW_ME_CHROMA_PATH", "data/chroma")).resolve()
+        tool_cap = max(512, _env_int("KNOW_ME_AGENT_TOOL_RESULT_MAX_CHARS", 4800))
+        fast_tool_cap = max(512, _env_int("KNOW_ME_AGENT_FAST_TOOL_RESULT_MAX_CHARS", 2400))
         return IndexSettings(
             corpus_root=root,
             chroma_path=chroma,
@@ -134,11 +157,17 @@ class IndexSettings:
             llm_temperature=_env_float("KNOW_ME_LLM_TEMPERATURE", 0.2),
             chat_history_max_turns=max(1, _env_int("KNOW_ME_CHAT_HISTORY_MAX_TURNS", 6)),
             agent_context_char_budget=max(4096, _env_int("KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET", 12000)),
-            agent_tool_result_max_chars=max(512, _env_int("KNOW_ME_AGENT_TOOL_RESULT_MAX_CHARS", 4800)),
+            agent_tool_result_max_chars=tool_cap,
             ingest_api_key=os.environ.get("KNOW_ME_INGEST_API_KEY", "").strip(),
             disclaimer_text=os.environ.get("KNOW_ME_DISCLAIMER", "").strip(),
             rag_hr_boost=_env_bool("KNOW_ME_RAG_HR_BOOST", True),
             structured_trace_enabled=_env_bool("KNOW_ME_STRUCTURED_TRACE", False),
             feedback_enabled=_env_bool("KNOW_ME_FEEDBACK_ENABLED", False),
             feedback_log_path=Path(os.environ.get("KNOW_ME_FEEDBACK_LOG", "data/feedback.jsonl")).expanduser(),
+            agent_fast_session_turns=max(0, _env_int("KNOW_ME_AGENT_FAST_SESSION_TURNS", 10)),
+            agent_fast_top_k=max(1, _env_int("KNOW_ME_AGENT_FAST_TOP_K", 3)),
+            agent_fast_disable_hr_boost=_env_bool("KNOW_ME_AGENT_FAST_DISABLE_HR_BOOST", True),
+            agent_fast_tool_result_max_chars=min(tool_cap, fast_tool_cap),
+            agent_fast_max_tool_rounds=max(1, min(10, _env_int("KNOW_ME_AGENT_FAST_MAX_TOOL_ROUNDS", 3))),
+            agent_fast_llm_timeout_sec=_env_optional_float("KNOW_ME_AGENT_FAST_LLM_TIMEOUT_SEC"),
         )

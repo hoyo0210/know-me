@@ -24,8 +24,8 @@ dependencies = [
 know-me = "know_me.cli:main"
 know-me-index = "know_me.cli:main"
 
-[tool.setuptools]
-packages = ["know_me"]
+[tool.setuptools.packages.find]
+where = ["."]
 
 [tool.setuptools.package-data]
 know_me = ["web_ui/*.html"]

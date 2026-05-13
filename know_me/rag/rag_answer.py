@@ -19,20 +19,20 @@ import logging
 import time
 from typing import TYPE_CHECKING, Iterator
 
-from know_me.job_intent import (
+from know_me.rag.job_intent import (
     greeting_fast_answer,
     is_greeting_only_message,
     should_retrieve_personal_corpus,
 )
-from know_me.llm import chat_complete, iter_chat_complete
-from know_me.prompts import NON_JOB_QUERY_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
-from know_me.retrieval import citation_dicts_from_chunks, retrieve, retrieved_to_citation_block
-from know_me.settings import IndexSettings
-from know_me.trace_log import emit_structured_trace
-from know_me.types_rag import RAGAnswer
+from know_me.rag.llm import chat_complete, iter_chat_complete
+from know_me.rag.prompts import NON_JOB_QUERY_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
+from know_me.rag.retrieval import citation_dicts_from_chunks, retrieve, retrieved_to_citation_block
+from know_me.core.settings import IndexSettings
+from know_me.observability.trace_log import emit_structured_trace
+from know_me.core.types_rag import RAGAnswer
 
 if TYPE_CHECKING:
-    from know_me.types_rag import RetrievedChunk
+    from know_me.core.types_rag import RetrievedChunk
 
 log = logging.getLogger(__name__)
 

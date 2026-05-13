@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from know_me.rag_answer import answer_with_rag
-from know_me.settings import IndexSettings
+from know_me.rag.rag_answer import answer_with_rag
+from know_me.core.settings import IndexSettings
 
 
 def load_cases_jsonl(path: Path) -> list[dict[str, Any]]:

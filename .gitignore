@@ -1,3 +1,6 @@
+# Cursor IDE 本地状态（含调试日志等）
+.cursor/
+
 # 本地环境与构建
 .venv/
 __pycache__/
@@ -20,3 +23,6 @@ eval/
 
 # 个人语料（敏感信息，仅本地维护，不推送远端）
 corpus/
+
+# 人设 Markdown（仅本地维护；示例见 persona.example/）
+persona/

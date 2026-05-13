@@ -23,15 +23,15 @@ from pathlib import Path
 import typer
 from dotenv import load_dotenv
 
-from know_me.agent_chat import iter_agent_chat_events, run_agent_chat_blocking
-from know_me.prompts_agent import SESSION_OPENING_ASK_IDENTITY
-from know_me.eval_run import run_eval_report
-from know_me.job_intent import is_greeting_only_message
-from know_me.pipeline import build_index
-from know_me.rag_answer import RAGStreamSession, answer_with_rag
-from know_me.sessions import ChatSessionStore
-from know_me.settings import IndexSettings
-from know_me.types_rag import RAGAnswer
+from know_me.agent.agent_chat import iter_agent_chat_events, run_agent_chat_blocking
+from know_me.agent.prompts_agent import SESSION_OPENING_ASK_IDENTITY
+from know_me.observability.eval_run import run_eval_report
+from know_me.rag.job_intent import is_greeting_only_message
+from know_me.index.pipeline import build_index
+from know_me.rag.rag_answer import RAGStreamSession, answer_with_rag
+from know_me.agent.sessions import ChatSessionStore
+from know_me.core.settings import IndexSettings
+from know_me.core.types_rag import RAGAnswer
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -324,7 +324,7 @@ def serve_cmd(
     _load_dotenv()
     import uvicorn
 
-    uvicorn.run("know_me.api_app:app", host=host, port=port, reload=reload)
+    uvicorn.run("know_me.api.app:app", host=host, port=port, reload=reload)
 
 
 @app.command("version")

@@ -23,4 +23,4 @@ know-me build-index --corpus-root corpus.example
 
 ## 字段说明
 
-Markdown 与可选 YAML front matter 见仓库根目录 **README.md** 中「语料库（corpus）」一节；元数据合并逻辑见 `know_me/splitting.py` 的 `build_chunk_metadata`。
+Markdown 与可选 YAML front matter 见仓库根目录 **README.md** 中「语料库（corpus）」一节；元数据合并逻辑见 `know_me/index/splitting.py` 的 `build_chunk_metadata`。
