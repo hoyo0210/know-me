@@ -24,30 +24,22 @@
 
 ## 系统架构 (Architecture)
 
-```
-                       +-----------------------------------+
-                       |    Markdown Corpus & Persona      |
-                       | (corpus/ & persona/ IDENTITY.md)  |
-                       +-----------------+-----------------+
-                                         |
-                                         v
-+-------------------+          +-------------------+
-|  know-me CLI /    |          |  Chunking & Embed |
-|  POST /ingest     | -------> |  OpenAI Compatible|
-+-------------------+          +---------+---------+
-                                         |
-                                         v
-                               +-------------------+
-                               |  ChromaDB Vector  |
-                               +---------+---------+
-                                         |
-+-------------------+                    v
-|   User / Web UI   | <==== SSE =====+-----------------------+
-|   (GET / & /chat) | ===== HTTP ==> | FastAPI App & Agent   |
-+-------------------+                | (LangChain + Tool RAG)|
-                                     +-----------------------+
-```
+```mermaid
+flowchart TB
+  corpus["Markdown Corpus & Persona"]
+  cli["know-me CLI / POST /ingest"]
+  embed["Chunking & Embed<br/>OpenAI Compatible"]
+  chroma[("ChromaDB Vector")]
+  ui["User / Web UI<br/>GET / & /chat"]
+  api["FastAPI App & Agent<br/>LangChain + Tool RAG"]
 
+  corpus --> embed
+  cli --> embed
+  embed --> chroma
+  ui -->|"HTTP + SSE"| api
+  api -->|"retrieve"| chroma
+  api -->|"SSE tokens"| ui
+```
 ---
 
 ## 快速开始 (Quickstart)
