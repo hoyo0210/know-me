@@ -46,7 +46,7 @@ def _build_rag_messages(query: str, chunks: list["RetrievedChunk"]) -> list[dict
     user_content = (
         f"用户问题：\n{query.strip()}\n\n"
         f"依据片段（仅可引用以下内容作答）：\n{evidence}\n\n"
-        "请按系统提示：寒暄类可短答；事实类只用依据片段、口语分段；无依据则按系统提示的兜底句，勿编造。"
+        "请按系统提示：寒暄类可短答；事实类只用依据片段，以完整书面句表达，勿为格式拆句。**换行会被前端拆成多条气泡**，连贯内容尽量写在同一行；仅在确有第二条独立要点时才使用一次换行。无依据则按系统提示的兜底句，勿编造。"
     )
     return [
         {"role": "system", "content": RAG_SYSTEM_PROMPT},

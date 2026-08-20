@@ -78,7 +78,8 @@ def _chunk_is_hr_audience(meta: dict[str, Any]) -> bool:
     if "hr" in aud:
         return True
     ck = str(meta.get("corpus_kind", ""))
-    return ck in ("hr_faq", "hr_screening")
+    # 与自动扫描的一级子目录名对齐：任意 hr_* 均视为 HR 向语料（含 hr_faq、hr_screening）
+    return ck.startswith("hr_")
 
 
 def retrieve(
