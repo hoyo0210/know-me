@@ -1,6 +1,36 @@
 # 最短上线（已有 ECS + 域名 + OSS + DashScope Key）
 
-把下面占位符换成你的值后，按顺序执行。
+## 推荐：ECS 一键安装聊天服务
+
+在 ECS 上（root）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hoyo0210/know-me/main/deploy/install-ecs.sh -o install-ecs.sh
+bash install-ecs.sh
+```
+
+按提示输入：聊天域名、简历域名、DashScope API Key、模型 id；可选安装 Nginx / Certbot。
+
+非交互示例：
+
+```bash
+export KNOW_ME_CHAT_HOST=chat.example.com
+export KNOW_ME_SITE_HOST=example.com
+export KNOW_ME_OPENAI_API_KEY='你的Key'
+export KNOW_ME_OPENAI_CHAT_MODEL=qwen-plus
+export KNOW_ME_OPENAI_EMBED_MODEL=text-embedding-v3
+export KNOW_ME_INSTALL_NGINX=1
+export KNOW_ME_INSTALL_CERTBOT=0   # DNS 指好且 80 通后再改 1
+bash install-ecs.sh
+```
+
+脚本会装到 `/opt/know-me/`，先用 `corpus.example` / `persona.example` 跑通；**上线请换成真实语料并重新 `build-index`**。
+
+简历站仍需本机构建后上传 OSS（见下文 B 节）。
+
+---
+
+把下面占位符换成你的值后，也可手动逐步执行。
 
 | 占位符 | 含义 | 你的值 |
 |--------|------|--------|
