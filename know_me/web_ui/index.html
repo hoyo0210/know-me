@@ -1175,11 +1175,10 @@
     if (!root) return path;
     return root.replace(/\/+$/, "") + path;
   }
-  var DEFAULT_RESUME_URL = "";
   function getResumeHref() {
     var u = typeof window.__KM_RESUME_URL === "string" ? String(window.__KM_RESUME_URL).trim() : "";
     if (u && u.indexOf("%%") !== 0) return u;
-    return DEFAULT_RESUME_URL;
+    return apiUrl("/resume");
   }
   function syncFooterResumeLink() {
     var a = document.getElementById("resumePageLink");
