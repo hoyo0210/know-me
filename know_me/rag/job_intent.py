@@ -230,28 +230,28 @@ def is_greeting_only_message(query: str) -> bool:
 
 
 def greeting_fast_answer(query: str) -> str:
-    """纯寒暄的本地 IM 短答（与职场分身人设一致，不调用模型）。"""
+    """纯寒暄的本地简短书面答（与正式初筛场景一致，不调用模型）。"""
     t = (query or "").strip()
     sl = t.lower()
     if any(x in t for x in ("谢谢", "感谢", "多谢")):
-        return "不客气哈～\n\n您要聊岗位相关随时说。"
+        return "不客气。若需沟通岗位匹配，请直接说明。"
     if any(x in t for x in ("再见", "拜拜")):
-        return "好嘞，回头聊～"
+        return "好的，有需要再联系。"
     if any(x in t for x in ("在吗", "在么", "在嘛", "在不在")):
-        return "在的～您请讲。"
+        return "我在，请讲。"
     if "打招呼" in t and len(t) <= 12:
-        return "在的哈～\n\n您请讲，我这边帮您跟 HR 聊初筛这块。"
+        return "我在。请说明您希望了解的初筛或岗位相关的具体问题。"
     if any(x in sl for x in ("hi", "hello")) and len(t) <= 16:
-        return "Hi～在的，您请讲。"
+        return "您好，我在。请讲。"
     if "早上好" in t or "上午好" in t:
-        return "早上好～在的，您请讲。"
+        return "早上好，我在。请讲。"
     if "下午好" in t:
-        return "下午好～在的，您请讲。"
+        return "下午好，我在。请讲。"
     if "晚上好" in t:
-        return "晚上好～在的，您请讲。"
+        return "晚上好，我在。请讲。"
     if any(x in t for x in ("好的", "好滴", "嗯嗯", "嗯好")) or sl in ("ok", "okay"):
-        return "好滴～您请讲。"
-    return "您好，在的～\n\n您有问题随时问我就行，岗位履历这块我能帮忙对接。"
+        return "好的，请讲。"
+    return "您好，我在线。请直接提出与岗位或履历相关的问题。"
 
 
 def _about_person_career(q: str) -> bool:

@@ -1,0 +1,14 @@
+services:
+  know-me:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      KNOW_ME_OPENAI_BASE_URL: ${KNOW_ME_OPENAI_BASE_URL:-http://host.docker.internal:1234/v1}
+      KNOW_ME_OPENAI_EMBED_MODEL: ${KNOW_ME_OPENAI_EMBED_MODEL:-}
+      KNOW_ME_OPENAI_CHAT_MODEL: ${KNOW_ME_OPENAI_CHAT_MODEL:-}
+      KNOW_ME_OPENAI_API_KEY: ${KNOW_ME_OPENAI_API_KEY:-}
+      KNOW_ME_CORPUS_ROOT: corpus.example
+      KNOW_ME_PERSONA_DIR: persona.example
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

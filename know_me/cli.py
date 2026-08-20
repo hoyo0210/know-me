@@ -24,12 +24,13 @@ import typer
 from dotenv import load_dotenv
 
 from know_me.agent.agent_chat import iter_agent_chat_events, run_agent_chat_blocking
+from know_me.agent.context_window import refresh_conversation_summary_if_needed
 from know_me.agent.prompts_agent import SESSION_OPENING_ASK_IDENTITY
 from know_me.observability.eval_run import run_eval_report
 from know_me.rag.job_intent import is_greeting_only_message
 from know_me.index.pipeline import build_index
 from know_me.rag.rag_answer import RAGStreamSession, answer_with_rag
-from know_me.agent.sessions import ChatSessionStore
+from know_me.agent.sessions import make_chat_session_store
 from know_me.core.settings import IndexSettings
 from know_me.core.types_rag import RAGAnswer
 
@@ -70,7 +71,11 @@ def _configure_logging(verbose: bool) -> None:
 
 @app.command("build-index")
 def build_index_cmd(
-    corpus_root: Path = typer.Option(Path("corpus"), "--corpus-root", help="语料根目录"),
+    corpus_root: Path = typer.Option(
+        Path("corpus"),
+        "--corpus-root",
+        help="语料根目录（自动扫描其下各一级子目录中的 Markdown）",
+    ),
     chroma_path: Path = typer.Option(Path("data/chroma"), "--chroma-path", help="Chroma 持久化目录"),
     reset: bool = typer.Option(False, "--reset", help="重建前删除已有集合"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
@@ -93,7 +98,11 @@ def build_index_cmd(
 @app.command("query")
 def query_cmd(
     question: str = typer.Argument(..., help="要向个人知识库提的问题"),
-    corpus_root: Path = typer.Option(Path("corpus"), "--corpus-root", help="语料根目录（与索引一致时可不改）"),
+    corpus_root: Path = typer.Option(
+        Path("corpus"),
+        "--corpus-root",
+        help="语料根目录（自动扫描一级子目录；与建索引时一致）",
+    ),
     chroma_path: Path = typer.Option(Path("data/chroma"), "--chroma-path", help="Chroma 持久化目录"),
     top_k: int | None = typer.Option(None, "--top-k", help="覆盖 KNOW_ME_RAG_TOP_K"),
     no_stream: bool = typer.Option(False, "--no-stream", help="关闭流式：一次性拉取全文"),
@@ -153,7 +162,11 @@ def query_cmd(
 
 @app.command("chat")
 def chat_cmd(
-    corpus_root: Path = typer.Option(Path("corpus"), "--corpus-root", help="语料根目录（与索引一致时可不改）"),
+    corpus_root: Path = typer.Option(
+        Path("corpus"),
+        "--corpus-root",
+        help="语料根目录（自动扫描一级子目录；与建索引时一致）",
+    ),
     chroma_path: Path = typer.Option(Path("data/chroma"), "--chroma-path", help="Chroma 持久化目录"),
     top_k: int | None = typer.Option(None, "--top-k", help="覆盖 KNOW_ME_RAG_TOP_K"),
     no_stream: bool = typer.Option(False, "--no-stream", help="每轮关闭流式，一次性打印全文"),
@@ -177,7 +190,7 @@ def chat_cmd(
     if not no_stream:
         _try_stdout_line_buffering()
 
-    store = ChatSessionStore(env.chat_history_max_turns)
+    store = make_chat_session_store(env)
     sid = store.ensure_session(None)
     typer.echo(SESSION_OPENING_ASK_IDENTITY, err=True)
     typer.echo("", err=True)
@@ -203,6 +216,9 @@ def chat_cmd(
             break
 
         hist = store.history(sid)
+        if env.agent_summary_mode == "lazy":
+            refresh_conversation_summary_if_needed(env, store, sid)
+        conv_summary, _ = store.get_conversation_summary(sid)
         try:
             if no_stream:
 
@@ -218,6 +234,7 @@ def chat_cmd(
                     top_k=top_k,
                     on_status=_chat_status,
                     preface_shown=True,
+                    conversation_summary=conv_summary,
                 )
                 if result.get("error"):
                     typer.echo(f"错误：{result['error']}", err=True)
@@ -231,12 +248,22 @@ def chat_cmd(
                 if clarify:
                     typer.echo(f"\n[澄清] {clarify}", err=True)
                 ans = str(result.get("answer_stored") or result.get("answer") or "").strip()
+                mid_store = str(result.get("message_id") or "").strip() or None
                 if ans:
-                    store.append_turn(sid, user_text, ans)
+                    store.append_turn(sid, user_text, ans, assistant_message_id=mid_store)
+                    if env.agent_summary_mode == "after_turn":
+                        refresh_conversation_summary_if_needed(env, store, sid)
             else:
-                st: dict[str, object] = {"full": "", "err": False}
+                st: dict[str, object] = {"full": "", "err": False, "mid": ""}
                 citations: list[dict] = []
-                for ev in iter_agent_chat_events(env, hist, user_text, top_k=top_k, preface_shown=True):
+                for ev in iter_agent_chat_events(
+                    env,
+                    hist,
+                    user_text,
+                    top_k=top_k,
+                    preface_shown=True,
+                    conversation_summary=conv_summary,
+                ):
                     t = ev.get("type")
                     if t == "status" and isinstance(ev.get("message"), str) and ev["message"].strip():
                         typer.echo(ev["message"], err=True)
@@ -249,12 +276,16 @@ def chat_cmd(
                         sys.stdout.flush()
                     elif t == "done":
                         st["full"] = str(ev.get("answer_stored") or ev.get("answer") or "")
+                        st["mid"] = str(ev.get("message_id") or "")
                     elif t == "error":
                         st["err"] = True
                         typer.echo(f"\n错误：{ev.get('message', '')}\n", err=True)
                 typer.echo()
                 if not st["err"] and str(st["full"]).strip():
-                    store.append_turn(sid, user_text, str(st["full"]))
+                    mid_s = str(st["mid"] or "").strip() or None
+                    store.append_turn(sid, user_text, str(st["full"]), assistant_message_id=mid_s)
+                    if env.agent_summary_mode == "after_turn":
+                        refresh_conversation_summary_if_needed(env, store, sid)
                 if citations:
                     typer.echo("---\n引用结构（source / date / distance）：", err=True)
                     typer.echo(json.dumps(citations, ensure_ascii=False, indent=2), err=True)
@@ -271,7 +302,11 @@ def eval_cmd(
         "--out",
         help="报告 JSON 路径；默认 eval/report-<UTC>.json",
     ),
-    corpus_root: Path = typer.Option(Path("corpus"), "--corpus-root", help="语料根目录"),
+    corpus_root: Path = typer.Option(
+        Path("corpus"),
+        "--corpus-root",
+        help="语料根目录（自动扫描其下各一级子目录中的 Markdown）",
+    ),
     chroma_path: Path = typer.Option(Path("data/chroma"), "--chroma-path", help="Chroma 目录"),
     top_k: int | None = typer.Option(None, "--top-k", help="覆盖 KNOW_ME_RAG_TOP_K"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),

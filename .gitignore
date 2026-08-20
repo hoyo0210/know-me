@@ -25,4 +25,4 @@ eval/
 corpus/
 
 # 人设 Markdown（仅本地维护；示例见 persona.example/）
-persona/
+/persona/

@@ -36,14 +36,14 @@ E02 数据流（与代码对应）
 ------------------------
   用户问句 → rag.retrieval（问句嵌入 + Chroma.query）
           → rag.rag_answer（拼「依据片段」+ 系统提示）
-          → rag.llm（POST /v1/chat/completions）
+          → rag.llm（LangChain ChatOpenAI → OpenAI 兼容 chat.completions）
           → RAGAnswer（正文 + citations + retrieved）
 
 E03 数据流（与代码对应）
 ------------------------
   HTTP POST /chat → agent.sessions（历史裁剪）→ agent.agent_chat（tools 循环 + 流式正文）
-                 → rag.llm.chat_complete_with_tools / iter_chat_complete
+                 → rag.llm（LangChain：bind_tools / invoke / stream）
                  → rag.retrieval（search_personal_knowledge 工具）
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

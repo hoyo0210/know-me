@@ -10,17 +10,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-# 语料一级目录名（与 PRD / backlog 中的 about_me、faq、hr_* 对齐）
-CorpusKind = Literal["about_me", "faq", "hr_faq", "hr_screening"]
-
-# 遍历时按此顺序扫描，避免顺序随文件系统变化而不稳定
-CORPUS_KINDS: tuple[CorpusKind, ...] = ("about_me", "faq", "hr_faq", "hr_screening")
+# 文档与示例仓库常用的语料一级目录名；建索引时**不再**仅限这些，而是自动扫描 corpus_root 下全部一级子目录
+CORPUS_KINDS: tuple[str, ...] = ("about_me", "faq", "hr_faq", "hr_screening")
 
 
 def is_corpus_kind(name: str) -> bool:
-    """判断目录名是否为受支持的语料类型（扩展新类型时改 CORPUS_KINDS 即可）。"""
+    """判断是否为内置命名的语料子目录（与 CORPUS_KINDS 对齐；任意子目录名均可用于建索引）。"""
     return name in CORPUS_KINDS
 
 
@@ -35,7 +32,7 @@ class RawDocument:
     - front_matter：YAML 头解析成的字典，用于 date / topic / audience 等
     """
 
-    corpus_kind: CorpusKind
+    corpus_kind: str
     source: str
     path: Path
     body: str

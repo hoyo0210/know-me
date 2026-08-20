@@ -1,0 +1,9 @@
+.venv
+data
+corpus
+persona
+eval
+.git
+.product
+**/__pycache__
+resume-site
