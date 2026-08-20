@@ -1,4 +1,14 @@
 import importlib
+from unittest.mock import patch
+
+import pytest
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _isolate_dotenv_from_parent_workspace():
+    """Parent workspace `.env` must not re-inject personal resume URL during app import/reload."""
+    with patch("dotenv.load_dotenv", lambda *args, **kwargs: False):
+        yield
 
 
 def test_resume_browser_url_default_is_empty(monkeypatch):
