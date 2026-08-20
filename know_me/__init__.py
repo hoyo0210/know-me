@@ -46,4 +46,4 @@ E03 数据流（与代码对应）
                  → rag.retrieval（search_personal_knowledge 工具）
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

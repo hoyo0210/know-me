@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "know-me"
-version = "0.1.0"
+version = "1.0.0"
 description = "Know Me — E01 索引、E02 RAG、E03 HTTP Agent、E04 HR、E05 观测与评测"
 readme = "README.md"
 requires-python = ">=3.10"
