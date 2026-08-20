@@ -1,14 +1,11 @@
 """
-E03 — Agent 编排：工具循环 + 最终流式输出（KM-302 / KM-303）。
+E03 — Agent 编排：LangChain `create_agent`（LangGraph）+ SSE（KM-302 / KM-303）。
 
 流程概要：
-0. **新会话**：开场白由 `POST /session` 或 SSE 首包 `session.opening` 下发（不经 LLM）；`iter_agent_chat_events` 仅把开场注入 LLM 上下文。`preface_shown=True` 表示客户端已展示过开场，不再重复推送。
-0b. **非新会话的纯寒暄**：本地固定短句，不跑工具首轮整包推理。
-1. 组装 **单条** `system`（新会话时把已展示的开场白并入 system，避免 `assistant` 夹在首条 `user` 前触发部分网关 400）+ 会话历史 + 本轮 `user`。
-2. 非流式 `chat_complete_with_tools` 循环直至无 `tool_calls` 或达到轮次上限（前若干轮可在「快会话」模式下收紧 top_k、工具回注长度与最大工具轮次）。
-3. 执行 `search_personal_knowledge` → `retrieve` + 片段文本回注；`ask_user_clarify` → SSE 事件 + 简短 JSON 回注。
-4. 无工具调用后：若本轮非流式回复已有正文，则**不再**二次调用流式接口，仅本地切段产出 `delta`（避免重复推理导致首 token 极慢）；否则 `iter_chat_complete` 拉流；流式仍空则回退到本轮 `content`。
-5. 产出统一事件 dict，供 HTTP 层编码为 SSE。
+0. **新会话 / 纯寒暄**：本地秒回，不跑 Agent。
+1. 组装 system（含开场、摘要、招聘方上下文）+ 滑动窗口历史 + 本轮 user，做字符预算裁剪。
+2. **LangGraph Agent**（`know_me.agent.langchain_runner`）：`search_personal_knowledge` / `ask_user_clarify` 工具循环，`stream_mode=messages` 映射为 citations / clarify / delta / done。
+3. 产出统一事件 dict，供 HTTP 层编码为 SSE。
 """
 
 from __future__ import annotations
@@ -20,14 +17,11 @@ import uuid
 from collections.abc import Callable
 from typing import Any, Iterator
 
-from know_me.rag.job_intent import (
-    greeting_fast_answer,
-    is_greeting_only_message,
-    should_retrieve_personal_corpus,
-)
-from know_me.rag.llm import chat_complete_with_tools, iter_chat_complete
-from know_me.agent.prompts_agent import AGENT_SYSTEM_PROMPT, AGENT_TOOLS, SESSION_OPENING_ASK_IDENTITY
-from know_me.rag.retrieval import citation_dicts_from_chunks, retrieve, retrieved_to_citation_block
+from know_me.rag.job_intent import greeting_fast_answer, is_greeting_only_message
+from know_me.agent.langchain_runner import iter_langchain_agent_events
+from know_me.agent.prompts_agent import AGENT_TOOLS, get_agent_system_prompt
+from know_me.agent.context_window import format_summary_system_suffix, prepare_history_for_agent
+from know_me.agent.recruiter_job import build_recruiter_context_suffix
 from know_me.core.settings import IndexSettings
 from know_me.observability.trace_log import emit_structured_trace
 
@@ -38,18 +32,78 @@ _AGENT_TOOLS_JSON_CHARS = len(json.dumps(AGENT_TOOLS, ensure_ascii=False))
 _MAX_USER_MSG_CHARS = 8000
 
 
-def _pseudo_stream_chunks(text: str, *, max_chars: int = 180) -> Iterator[str]:
-    """无二次 LLM 时，将已定稿正文切成多段 delta，便于前端仍按流式渲染。"""
-    if max_chars < 1:
-        max_chars = 1
-    s = text
-    for i in range(0, len(s), max_chars):
-        yield s[i : i + max_chars]
-
-
 def _approx_chat_payload_chars(messages: list[dict[str, Any]], tools_chars: int) -> int:
     """粗估发往 chat.completions 的 messages + tools JSON 字符量（与网关 token 限制单调相关）。"""
     return len(json.dumps(messages, ensure_ascii=False)) + tools_chars
+
+
+def _fixed_payload_chars(system_content: str) -> int:
+    """system + tools JSON 粗估字符量（不含历史与本轮 user）。"""
+    return _approx_chat_payload_chars([{"role": "system", "content": system_content}], _AGENT_TOOLS_JSON_CHARS)
+
+
+def _resolve_system_body(
+    settings: IndexSettings,
+    *,
+    viewer_suffix: str,
+    recruiter_suffix: str,
+    summary_suffix: str,
+    session_prefix: str | None,
+    prefer_slim: bool,
+) -> tuple[str, bool]:
+    """
+    在完整 / 精简 system 间选择，使 system+tools 尽量适配 KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET。
+    返回 (system_body, used_slim)。
+    """
+    budget = settings.agent_context_char_budget
+    reserve_user = 1200
+    opening = (session_prefix or "").strip()
+    opening_note = _SESSION_OPENING_IN_SYSTEM_NOTE if opening else ""
+
+    def pack(slim: bool) -> str:
+        base = get_agent_system_prompt(slim=slim) + viewer_suffix + recruiter_suffix + summary_suffix
+        if opening:
+            op = opening if len(opening) <= 2048 else opening[:2048].rstrip() + "…"
+            base += opening_note + op
+        return base
+
+    use_slim = prefer_slim
+    body = pack(use_slim)
+    fixed = _fixed_payload_chars(body)
+    if (
+        settings.agent_system_auto_slim
+        and not prefer_slim
+        and fixed > max(budget - reserve_user, int(budget * 0.72))
+    ):
+        use_slim = True
+        body = pack(True)
+        fixed = _fixed_payload_chars(body)
+        log.info(
+            "Agent system 自动切换精简版（fixed≈%s budget=%s；省略 few-shot 与长篇阶段说明）",
+            fixed,
+            budget,
+        )
+
+    if fixed > budget - 400:
+        if summary_suffix:
+            body = pack(use_slim)
+            body = (
+                get_agent_system_prompt(slim=use_slim)
+                + viewer_suffix
+                + recruiter_suffix
+                + (opening_note + (opening[:2048] if opening else ""))
+            )
+            fixed = _fixed_payload_chars(body)
+        if fixed > budget - 400 and opening:
+            body = (
+                get_agent_system_prompt(slim=use_slim)
+                + viewer_suffix
+                + recruiter_suffix
+                + summary_suffix
+            )
+            fixed = _fixed_payload_chars(body)
+
+    return body, use_slim
 
 
 def _trim_hist_and_user_for_budget(
@@ -63,6 +117,7 @@ def _trim_hist_and_user_for_budget(
     h = list(hist_sl)
     u = user_content if len(user_content) <= _MAX_USER_MSG_CHARS else user_content[:_MAX_USER_MSG_CHARS].rstrip() + "\n（…上文已截断）"
     limit = max(int(char_budget), 4096)
+    fixed = _fixed_payload_chars(system_content)
 
     def over() -> bool:
         msgs = [{"role": "system", "content": system_content}, *h, {"role": "user", "content": u}]
@@ -74,9 +129,10 @@ def _trim_hist_and_user_for_budget(
         dropped += 2
     if dropped:
         log.warning(
-            "为适配 KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET=%s，已丢弃最早 %d 条历史消息",
+            "为适配 KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET=%s，已丢弃最早 %d 条滑动窗口历史（fixed≈%s）",
             char_budget,
             dropped,
+            fixed,
         )
     u_truncated = False
     guard = 0
@@ -87,26 +143,66 @@ def _trim_hist_and_user_for_budget(
     if u_truncated:
         log.warning("用户本轮输入已缩短以适配 KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET=%s", char_budget)
     if over():
-        log.error(
-            "在 KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET=%s 下仍无法容纳 system+tools+本轮；请调大该变量或换更大上下文的对话模型",
-            char_budget,
-        )
+        if not h:
+            log.error(
+                "固定上下文 system+tools≈%s 已超过预算 %s（滑动窗口历史已全部移除后仍不足）。"
+                "请调大 KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET、确认 KNOW_ME_AGENT_SYSTEM_AUTO_SLIM=1，或缩短 persona。",
+                fixed,
+                char_budget,
+            )
+        else:
+            log.error(
+                "在 KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET=%s 下仍无法容纳 system+tools+本轮（fixed≈%s）；请调大预算或换更大上下文模型",
+                char_budget,
+                fixed,
+            )
     return h, u
 
 
-def _clamp_tool_body(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return (
-        text[:max_chars].rstrip()
-        + "\n\n（检索片段过长，已截断；请仅依据已给出内容回答，勿编造未出现的细节。）"
-    )
+def _reply_display_stored(
+    body: str,
+    *,
+    session_prefix: str | None,
+    preface_shown: bool,
+    opening_already_in_db: bool,
+) -> tuple[str, str]:
+    """助手回复的展示文本与入库全文。开场已单独持久化时勿再把开场拼进本条 assistant。"""
+    b = (body or "").strip() or "（模型未返回有效正文。）"
+    if session_prefix:
+        if opening_already_in_db:
+            return b, b
+        stored = f"{session_prefix}\n\n{b}".strip()
+        display = b if preface_shown else stored
+        return display, stored
+    return b, b
 
 
 # 部分 OpenAI 兼容服务要求 system 后首条须为 user，不接受「system → assistant(开场) → user」。
 _SESSION_OPENING_IN_SYSTEM_NOTE = (
     "\n\n【上下文：以下为已对用户展示的开场白原文，勿逐字重复；请直接针对用户本轮输入作答。】\n"
 )
+
+
+def _viewer_context_suffix(display_name: str | None, role: str | None) -> str:
+    """访客称呼与身份，并入 system（单行化、长度封顶）；本段在会话内保持稳定认知。"""
+    d = (display_name or "").strip().replace("\r", " ").replace("\n", " ")
+    r = (role or "").strip().replace("\r", " ").replace("\n", " ")
+    if len(d) > 64:
+        d = d[:64].rstrip()
+    if len(r) > 64:
+        r = r[:64].rstrip()
+    if not d and not r:
+        return ""
+    lines = ["\n\n【当前对话对象 · 招聘方】"]
+    if d:
+        lines.append(f"称呼：{d}")
+    if r:
+        lines.append(f"身份定位：{r}")
+    lines.append(
+        "以上为本会话对对方的稳定认知，全程保持；若用户正文明确要求更改称呼或身份再作调整。"
+        "请结合以上背景调整措辞与举例侧重；勿编造对方未提供的隐私或组织细节。"
+    )
+    return "\n".join(lines)
 
 
 def _done_event(
@@ -148,12 +244,18 @@ def iter_agent_chat_events(
     top_k: int | None = None,
     message_id: str | None = None,
     preface_shown: bool = False,
+    viewer_display_name: str | None = None,
+    viewer_role: str | None = None,
+    recruiter_job_title: str | None = None,
+    recruiter_contact: str | None = None,
+    session_opening_for_context: str | None = None,
+    conversation_summary: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """
     产出供 SSE 序列化的事件 dict。
 
     关键字段：
-    - `type=session`：分配到的 session_id；可选 `opening`（新会话且客户端未先调 `/session` 时由网关附带）
+    - `type=session`：分配到的 session_id；可选 `disclaimer`
     - `type=delta`：`text` 增量
     - `type=citations`：`items` 为引用表（检索工具累计）
     - `type=clarify`：`question` 澄清问句
@@ -163,9 +265,17 @@ def iter_agent_chat_events(
     """
     mid = message_id or uuid.uuid4().hex
     t0 = time.perf_counter()
-    usages_accum: list[dict[str, Any]] = []
     um = user_message.strip()
-    hist_sl = _history_messages(history)
+    raw_sl = _history_messages(history)
+    leading_opening: str | None = None
+    if raw_sl and raw_sl[0].get("role") == "assistant":
+        lone = str(raw_sl[0].get("content") or "").strip()
+        if lone:
+            leading_opening = lone
+    hist_sl = prepare_history_for_agent(
+        history,
+        window_turns=settings.agent_context_window_turns,
+    )
     completed_pairs = len(hist_sl) // 2
     in_fast_window = (
         settings.agent_fast_session_turns > 0
@@ -199,18 +309,30 @@ def iter_agent_chat_events(
             llm_timeout,
         )
     hist_empty = len(hist_sl) == 0
-    session_prefix: str | None = None
+    co = (session_opening_for_context or "").strip()
+    lo = (leading_opening or "").strip()
+    raw_open = (co or lo).strip()
+    session_prefix: str | None = raw_open if raw_open else None
+    opening_already_in_db = bool(leading_opening)
 
-    # 新会话：开场仅写入 LLM 上下文；未 preface 时由 HTTP 层在 session 事件中附带 opening
+    # 新会话：将开场白注入 system（客户端或已从 hist 剥离的持久化开场）
     if hist_empty:
-        session_prefix = SESSION_OPENING_ASK_IDENTITY
-        log.info("新会话：开场已注入上下文；preface_shown=%s（开场由网关 /session 或 session.opening 下发，此处不重复 delta）", preface_shown)
+        log.info(
+            "新会话：开场上下文 len=%s；preface_shown=%s；leading_opening_in_hist=%s",
+            len(raw_open) if raw_open else 0,
+            preface_shown,
+            bool(leading_opening),
+        )
         if is_greeting_only_message(um):
-            tail = "收到～您请讲具体问题哈。"
+            tail = "好的，请直接说明您希望了解的具体问题。"
             yield {"type": "citations", "items": []}
             yield {"type": "delta", "text": tail if preface_shown else ("\n\n" + tail)}
-            stored = f"{session_prefix}\n\n{tail}".strip()
-            display = tail if preface_shown else stored
+            display, stored = _reply_display_stored(
+                tail,
+                session_prefix=session_prefix,
+                preface_shown=preface_shown,
+                opening_already_in_db=opening_already_in_db,
+            )
             disc = settings.disclaimer_text.strip() or None
             emit_structured_trace(
                 settings,
@@ -266,214 +388,65 @@ def iter_agent_chat_events(
         return
 
     messages: list[dict[str, Any]]
-    system_body = AGENT_SYSTEM_PROMPT
-    if session_prefix:
-        system_body = AGENT_SYSTEM_PROMPT + _SESSION_OPENING_IN_SYSTEM_NOTE + session_prefix
+    vctx = _viewer_context_suffix(viewer_display_name, viewer_role)
+    rctx = build_recruiter_context_suffix(recruiter_job_title, recruiter_contact)
+    summary_suffix = format_summary_system_suffix(conversation_summary)
+    system_body, used_slim = _resolve_system_body(
+        settings,
+        viewer_suffix=vctx,
+        recruiter_suffix=rctx,
+        summary_suffix=summary_suffix,
+        session_prefix=session_prefix,
+        prefer_slim=in_fast_window,
+    )
+    if used_slim and in_fast_window:
+        log.debug("快会话窗口内使用精简 system")
     hist_for_llm, um_llm = _trim_hist_and_user_for_budget(
         hist_sl,
         system_content=system_body,
         user_content=um,
         char_budget=settings.agent_context_char_budget,
     )
+    um_llm = (um_llm or "").strip() or um.strip() or "请继续。"
     messages = [{"role": "system", "content": system_body}]
     messages.extend(hist_for_llm)
     messages.append({"role": "user", "content": um_llm})
     payload_chars = _approx_chat_payload_chars(messages, _AGENT_TOOLS_JSON_CHARS)
 
     if payload_chars > settings.agent_context_char_budget:
+        fixed = _fixed_payload_chars(system_body)
         yield {
             "type": "error",
             "message": (
-                f"当前请求仍超过上下文预算（KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET={settings.agent_context_char_budget}）。"
-                "请调大该环境变量或换更大上下文的对话模型。"
+                f"当前请求仍超过上下文预算（KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET={settings.agent_context_char_budget}，"
+                f"其中 system+tools 约 {fixed} 字符）。"
+                "请调大 KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET、保持 KNOW_ME_AGENT_SYSTEM_AUTO_SLIM=1，"
+                "或换更大上下文的对话模型。"
             ),
             "message_id": mid,
         }
         return
 
-    collected_citations: list[dict[str, Any]] = []
-    last_clarify: str | None = None
-
-    yield {
-        "type": "status",
-        "phase": "start",
-        "message": "正在连接模型并处理请求（工具推理可能需数秒）…",
-    }
-
-    for _ in range(max_tool_rounds_eff):
-        turn = chat_complete_with_tools(
-            base_url=settings.openai_base_url,
-            api_key=settings.openai_api_key,
-            model=settings.openai_chat_model,
-            messages=messages,
-            tools=AGENT_TOOLS,
-            temperature=settings.llm_temperature,
-            timeout=llm_timeout,
-        )
-        if turn.usage:
-            usages_accum.append(turn.usage)
-
-        if turn.tool_calls:
-            assistant_tool_msg: dict[str, Any] = {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": tc["id"],
-                        "type": tc.get("type") or "function",
-                        "function": {
-                            "name": tc["function"]["name"],
-                            "arguments": tc["function"]["arguments"],
-                        },
-                    }
-                    for tc in turn.tool_calls
-                ],
-            }
-            if turn.content:
-                assistant_tool_msg["content"] = turn.content
-            messages.append(assistant_tool_msg)
-
-            for tc in turn.tool_calls:
-                tid = str(tc.get("id") or "")
-                fn = tc.get("function") or {}
-                name = fn.get("name", "") if isinstance(fn, dict) else ""
-                raw_args = fn.get("arguments", "") if isinstance(fn, dict) else ""
-                try:
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else {}
-                except json.JSONDecodeError:
-                    args = {}
-                if not isinstance(args, dict):
-                    args = {}
-
-                if name == "search_personal_knowledge":
-                    q = str(args.get("query", "")).strip() or user_message.strip()
-                    if not should_retrieve_personal_corpus(user_message.strip()):
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tid,
-                                "content": (
-                                    "（系统：用户本轮已判定为非 HR 初筛 / 非求职相关信息，已跳过个人知识库检索。"
-                                    "请用 2～4 条极短口语引导对方改为岗位、履历、初筛相关问题；勿编造个人事实。）"
-                                ),
-                            },
-                        )
-                        collected_citations = []
-                        continue
-                    yield {"type": "status", "phase": "retrieve", "message": "正在检索个人知识库…"}
-                    hr_kw: bool | None = (
-                        False
-                        if in_fast_window and settings.agent_fast_disable_hr_boost
-                        else None
-                    )
-                    chunks = retrieve(settings, q, top_k=k, use_hr_boost=hr_kw)
-                    collected_citations = citation_dicts_from_chunks(chunks)
-                    body = (
-                        "（未检索到相关片段）"
-                        if not chunks
-                        else _clamp_tool_body(
-                            retrieved_to_citation_block(chunks),
-                            tool_body_cap,
-                        )
-                    )
-                    messages.append({"role": "tool", "tool_call_id": tid, "content": body})
-                elif name == "ask_user_clarify":
-                    qn = str(args.get("question", "")).strip() or "能否补充一下具体场景？"
-                    last_clarify = qn
-                    yield {"type": "clarify", "question": qn}
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tid,
-                            "content": json.dumps(
-                                {"status": "clarify_asked", "question": qn},
-                                ensure_ascii=False,
-                            ),
-                        },
-                    )
-                else:
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tid,
-                            "content": f"未知工具：{name}",
-                        },
-                    )
-            continue
-
-        yield {"type": "citations", "items": collected_citations}
-
-        yield {"type": "status", "phase": "stream", "message": "正在流式生成回答…"}
-
-        buf: list[str] = []
-        ready_text = (turn.content or "").strip()
-        if ready_text:
-            for frag in _pseudo_stream_chunks(ready_text):
-                buf.append(frag)
-                yield {"type": "delta", "text": frag}
-        else:
-            for frag in iter_chat_complete(
-                base_url=settings.openai_base_url,
-                api_key=settings.openai_api_key,
-                model=settings.openai_chat_model,
-                messages=messages,
-                temperature=settings.llm_temperature,
-                timeout=llm_timeout,
-            ):
-                buf.append(frag)
-                yield {"type": "delta", "text": frag}
-        body = "".join(buf).strip()
-        if not body and turn.content and turn.content.strip():
-            body = turn.content.strip()
-        if not body:
-            body = "（模型未返回有效正文。）"
-        if session_prefix:
-            stored = f"{session_prefix}\n\n{body}".strip()
-            display = body if preface_shown else stored
-        else:
-            stored = body
-            display = body
-        disc = settings.disclaimer_text.strip() or None
-        chunk_ids = [
-            str(x.get("chunk_id"))
-            for x in collected_citations
-            if isinstance(x, dict) and x.get("chunk_id") is not None
-        ]
-        emit_structured_trace(
-            settings,
-            {
-                "event": "agent_chat",
-                "message_id": mid,
-                "user_message": user_message.strip()[:2000],
-                "chunk_ids": chunk_ids,
-                "embed_model": settings.openai_embed_model,
-                "chat_model": settings.openai_chat_model,
-                "latency_total_ms": round((time.perf_counter() - t0) * 1000.0, 2),
-                "usage_tool_rounds": usages_accum or None,
-                "in_fast_session": in_fast_window,
-            },
-        )
-        yield _done_event(
-            answer=display,
-            answer_stored=stored,
-            clarify=last_clarify,
-            disclaimer=disc,
-            message_id=mid,
-        )
-        return
-
-    emit_structured_trace(
-        settings,
-        {
-            "event": "agent_chat_error",
-            "message_id": mid,
-            "user_message": user_message.strip()[:2000],
-            "error": "工具调用轮次超过上限，请简化问题后重试。",
-            "latency_total_ms": round((time.perf_counter() - t0) * 1000.0, 2),
-            "usage_tool_rounds": usages_accum or None,
-            "in_fast_session": in_fast_window,
-        },
+    yield from iter_langchain_agent_events(
+        settings=settings,
+        system_body=system_body,
+        hist_for_llm=hist_for_llm,
+        um_llm=um_llm,
+        user_message=um,
+        top_k=k,
+        tool_body_cap=tool_body_cap,
+        in_fast_window=in_fast_window,
+        llm_timeout=llm_timeout,
+        max_tool_rounds=max_tool_rounds_eff,
+        message_id=mid,
+        t0=t0,
+        session_prefix=session_prefix,
+        preface_shown=preface_shown,
+        opening_already_in_db=opening_already_in_db,
+        done_event_fn=_done_event,
+        reply_display_stored_fn=_reply_display_stored,
     )
-    yield {"type": "error", "message": "工具调用轮次超过上限，请简化问题后重试。", "message_id": mid}
+    return
 
 
 def run_agent_chat_blocking(
@@ -485,6 +458,12 @@ def run_agent_chat_blocking(
     message_id: str | None = None,
     on_status: Callable[[dict[str, Any]], None] | None = None,
     preface_shown: bool = False,
+    viewer_display_name: str | None = None,
+    viewer_role: str | None = None,
+    recruiter_job_title: str | None = None,
+    recruiter_contact: str | None = None,
+    session_opening_for_context: str | None = None,
+    conversation_summary: str | None = None,
 ) -> dict[str, Any]:
     """非流式：聚合 `iter_agent_chat_events` 为单份 JSON 友好结构。可选 `on_status` 用于终端进度提示。"""
     foot = settings.disclaimer_text.strip() or None
@@ -500,6 +479,12 @@ def run_agent_chat_blocking(
         top_k=top_k,
         message_id=message_id,
         preface_shown=preface_shown,
+        viewer_display_name=viewer_display_name,
+        viewer_role=viewer_role,
+        recruiter_job_title=recruiter_job_title,
+        recruiter_contact=recruiter_contact,
+        session_opening_for_context=session_opening_for_context,
+        conversation_summary=conversation_summary,
     ):
         t = ev.get("type")
         if t == "status" and on_status is not None:

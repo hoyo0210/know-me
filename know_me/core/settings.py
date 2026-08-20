@@ -13,7 +13,10 @@ OpenAI 兼容网关（同一主机常见部署）
 E03（HTTP API）
 ---------------
 - `KNOW_ME_CHAT_HISTORY_MAX_TURNS`：默认 6。
+- `KNOW_ME_CHAT_SQLITE_ENABLED` / `KNOW_ME_CHAT_SQLITE_PATH`：是否将会话 **user/assistant** 轮次写入 SQLite（默认开启，路径默认 `data/chat.sqlite`）；设 `KNOW_ME_CHAT_SQLITE_ENABLED=0` 则回退为进程内内存，重启即丢。
 - `KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET`：发往对话网关的 `messages` 总长度粗估上限（JSON 字符量，含 system）；本地小上下文模型可调低（如 6000）。
+- `KNOW_ME_AGENT_CONTEXT_WINDOW_TURNS`：Agent 滑动窗口保留的最近原文轮数；更早内容进入会话摘要。
+- `KNOW_ME_AGENT_SUMMARY_*`：会话摘要；`KNOW_ME_AGENT_SUMMARY_MODE` 默认 `lazy`（按需），非每轮结束后自动跑。
 - `KNOW_ME_AGENT_TOOL_RESULT_MAX_CHARS`：单次 `search_personal_knowledge` 写入 tool 消息的正文上限，超出则截断。
 - **前 N 轮快会话（E03）**：`KNOW_ME_AGENT_FAST_SESSION_TURNS` 等；用于压缩检索与工具上下文以**尽量**缩短延迟；**整轮 <2s 仍依赖对话/嵌入网关与模型速度**，可选 `KNOW_ME_AGENT_FAST_LLM_TIMEOUT_SEC` 硬超时（超时则请求失败）。
 - `KNOW_ME_INGEST_API_KEY`：`POST /ingest` 必填的 Bearer 密钥；未设置则该路由不可用。
@@ -73,6 +76,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _norm_summary_mode(raw: str | None) -> str:
+    """`lazy` 按需（默认）；`after_turn` 每轮结束后；`off` 关闭。"""
+    m = (raw or "lazy").strip().lower()
+    if m in ("off", "disabled", "none", "0", "false"):
+        return "off"
+    if m in ("after_turn", "eager", "always", "each_turn"):
+        return "after_turn"
+    return "lazy"
+
+
 @dataclass(frozen=True)
 class IndexSettings:
     """
@@ -81,7 +94,7 @@ class IndexSettings:
     说明：类名仍为 IndexSettings 是历史原因；其中已包含 E02 所需字段，避免拆成多个 settings 文件。
     """
 
-    # KNOW_ME_CORPUS_ROOT（仅 build-index 使用；CLI --corpus-root 优先）
+    # KNOW_ME_CORPUS_ROOT：语料根路径；其下每个一级子目录递归收录 *.md（自动扫描，不限固定目录名；CLI --corpus-root 优先）
     corpus_root: Path
     # KNOW_ME_CHROMA_PATH（CLI --chroma-path 优先；检索与建索引必须指向同一目录）
     chroma_path: Path
@@ -106,8 +119,24 @@ class IndexSettings:
     llm_temperature: float
     # KNOW_ME_CHAT_HISTORY_MAX_TURNS：E03 API 多轮会话保留的「轮」数（一轮 ≈ user + assistant 各一条）
     chat_history_max_turns: int
+    # KNOW_ME_CHAT_SQLITE_ENABLED：是否将会话写入 SQLite（默认 true）
+    chat_sqlite_enabled: bool
+    # KNOW_ME_CHAT_SQLITE_PATH：会话库文件路径（默认 data/chat.sqlite）
+    chat_sqlite_path: Path
     # KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET：Agent 发往 chat.completions 的 messages 粗估字符上限（防本地网关 context 溢出）
     agent_context_char_budget: int
+    # KNOW_ME_AGENT_CONTEXT_WINDOW_TURNS：Agent 可见的最近原文轮数（滑动窗口）
+    agent_context_window_turns: int
+    # KNOW_ME_AGENT_SUMMARY_ENABLED：是否将滑出窗口的对话合并为会话摘要
+    agent_summary_enabled: bool
+    agent_summary_mode: str
+    agent_summary_max_chars: int
+    agent_summary_rag_enabled: bool
+    agent_summary_rag_max_chars: int
+    agent_summary_min_transcript_chars: int
+    agent_summary_timeout_sec: float
+    # KNOW_ME_AGENT_SYSTEM_AUTO_SLIM：固定上下文（system+tools）接近预算时自动改用精简 system
+    agent_system_auto_slim: bool
     # KNOW_ME_AGENT_TOOL_RESULT_MAX_CHARS：检索 tool 回注正文最大字符数
     agent_tool_result_max_chars: int
     # KNOW_ME_INGEST_API_KEY：E03 `POST /ingest` 的 Bearer 密钥；留空则禁用入库接口（返回 503）
@@ -156,7 +185,20 @@ class IndexSettings:
             rag_top_k=_env_int("KNOW_ME_RAG_TOP_K", 5),
             llm_temperature=_env_float("KNOW_ME_LLM_TEMPERATURE", 0.2),
             chat_history_max_turns=max(1, _env_int("KNOW_ME_CHAT_HISTORY_MAX_TURNS", 6)),
+            chat_sqlite_enabled=_env_bool("KNOW_ME_CHAT_SQLITE_ENABLED", True),
+            chat_sqlite_path=Path(os.environ.get("KNOW_ME_CHAT_SQLITE_PATH", "data/chat.sqlite")).expanduser(),
             agent_context_char_budget=max(4096, _env_int("KNOW_ME_AGENT_CONTEXT_CHAR_BUDGET", 12000)),
+            agent_context_window_turns=max(1, _env_int("KNOW_ME_AGENT_CONTEXT_WINDOW_TURNS", 3)),
+            agent_summary_enabled=_env_bool("KNOW_ME_AGENT_SUMMARY_ENABLED", True),
+            agent_summary_mode=_norm_summary_mode(os.environ.get("KNOW_ME_AGENT_SUMMARY_MODE")),
+            agent_summary_max_chars=max(200, _env_int("KNOW_ME_AGENT_SUMMARY_MAX_CHARS", 900)),
+            agent_summary_rag_enabled=_env_bool("KNOW_ME_AGENT_SUMMARY_RAG_ENABLED", False),
+            agent_summary_rag_max_chars=max(512, _env_int("KNOW_ME_AGENT_SUMMARY_RAG_MAX_CHARS", 2400)),
+            agent_summary_min_transcript_chars=max(
+                0, _env_int("KNOW_ME_AGENT_SUMMARY_MIN_TRANSCRIPT_CHARS", 120),
+            ),
+            agent_summary_timeout_sec=max(15.0, _env_float("KNOW_ME_AGENT_SUMMARY_TIMEOUT_SEC", 90.0)),
+            agent_system_auto_slim=_env_bool("KNOW_ME_AGENT_SYSTEM_AUTO_SLIM", True),
             agent_tool_result_max_chars=tool_cap,
             ingest_api_key=os.environ.get("KNOW_ME_INGEST_API_KEY", "").strip(),
             disclaimer_text=os.environ.get("KNOW_ME_DISCLAIMER", "").strip(),
