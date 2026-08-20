@@ -1,14 +1,13 @@
-# 生产 Compose 示例（ECS + 云端 DashScope）
-#
-# 用法：
-#   cp deploy/docker-compose.prod.yml.example /opt/know-me/docker-compose.yml
-#   编辑同目录 .env（勿提交），准备 ./corpus ./persona ./data
-#   docker compose up -d --build
-#   docker compose exec know-me know-me build-index
+# 放到 /opt/know-me/docker-compose.yml
+# 目录结构：
+#   /opt/know-me/
+#     docker-compose.yml  (.env 同目录)
+#     src/                 # git clone 的 know-me 源码
+#     corpus/ persona/ data/
 
 services:
   know-me:
-    build: .
+    build: ./src
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -18,9 +17,7 @@ services:
       KNOW_ME_CORPUS_ROOT: /data/corpus
       KNOW_ME_PERSONA_DIR: /data/persona
       KNOW_ME_CHAT_SQLITE_PATH: /data/chat.sqlite
-      # KNOW_ME_RESUME_BROWSER_URL 写在 .env
     volumes:
       - ./corpus:/data/corpus:ro
       - ./persona:/data/persona:ro
       - ./data:/data
-    # 不需要 host.docker.internal：模型走公网 DashScope

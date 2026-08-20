@@ -5,6 +5,9 @@
 - **B（范围）**：发布聊天服务（`know-me`）+ 简历静态站（`know-me-showcase`）
 - **B（模型）**：使用阿里云通义（DashScope）等 **OpenAI 兼容云 API**，ECS 上不跑本地大模型
 
+> **已有 ECS、域名、OSS、API Key？** 直接跟最短清单：  
+> [deploy-aliyun-checklist.md](./deploy-aliyun-checklist.md)
+
 ```mermaid
 flowchart LR
   user[访客]
