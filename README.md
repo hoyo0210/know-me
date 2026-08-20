@@ -1,213 +1,206 @@
 # Know Me
 
-**Know Me** 是个人数字分身（Personal Digital Twin）的参考实现：把授权语料写入本地向量库，用 **RAG + Agent** 做可引用出处的问答与多轮对话，并覆盖 HR 初筛等场景的提示与检索策略。
+**Know Me** 是一个面向个人数字分身（Personal Digital Twin）的开源参考实现。它将你的个人授权语料、技术履历与问答知识库载入本地向量数据库，结合 **RAG（检索增强生成）与多轮智能体（Agent）** 技术，提供具备来源出处引用、人设价值观对齐以及 HR 招聘初筛增强的交互式对话能力。
 
-## 功能概览
+---
 
-| 代号 | 内容 |
-|------|------|
-| E01 | 语料加载、切分、嵌入，写入 Chroma（`build-index`） |
-| E02 | 向量检索 + 基于片段的 LLM 回答（`query`） |
-| E03 | 多轮会话、工具循环、FastAPI + Web 聊天页（`chat` / `serve`） |
-| E04 | HR 类意图检索增强、免责声明与敏感话题边界 |
-| E05 | 结构化追踪、JSONL 评测回归、`POST /feedback` |
+## 核心特性 (Key Highlights)
 
-## 环境要求
+- 🔒 **隐私优先与本地化支持**：
+  - 支持完全离线或私有化部署。兼容 [LM Studio](https://lmstudio.ai/)、[Ollama](https://ollama.com/)、[vLLM](https://github.com/vllm-project/vllm) 等本地大模型网关，以及任何 OpenAI 兼容 API。
+  - 核心语料（`corpus/`）与人设（`persona/`）默认纳入 Git 忽略列表，绝不意外泄露个人隐私数据。
+- 📚 **基于出处的 RAG 检索体系**：
+  - 支持多层级 Markdown 语料解析、YAML 头信息与分块切分。
+  - 使用本地持久化 Chroma 向量库，回答具备可追溯的文档片段与主题标签。
+- 🎭 **声明式人设与价值观边界 (Persona & Soul)**：
+  - 通过 `IDENTITY.md`（身份认同、欢迎语）与 `SOUL.md`（三观与行为边界）灵活调校分身语气与安全边界。
+- 💼 **HR 招聘初筛增强 (HR Screening Boost)**：
+  - 针对招聘流程、初筛口径、工作期望等意图进行智能识别，并对 `hr_faq` 与 `hr_screening` 语料实施优先召回与重排。
+- ⚡ **现代工程化与开箱即用**：
+  - 内置基于 SSE（Server-Sent Events）的流式 Web 聊天页面，支持打字机效果、头像与在线简历外链。
+  - 提供单命令 Docker Compose 快速启动与全功能 CLI 工具箱。
 
-- Python **≥ 3.10**
-- 任意 **OpenAI 兼容** 对话与嵌入接口（例如本地 [LM Studio](https://lmstudio.ai/)），需分别配置对话模型与嵌入模型 id
+---
 
-## 安装
-
-在仓库根目录执行：
-
-```bash
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e .
-```
-
-安装后可使用命令 **`know-me`**（与 `know-me-index` 等价，均进入同一 CLI）。
-
-## 配置
-
-复制示例环境文件并填写模型等变量：
-
-```bash
-cp .env.example .env
-```
-
-至少设置（含义见 `.env.example` 内注释）：
-
-- `KNOW_ME_OPENAI_BASE_URL` — 须含 `/v1` 的根地址  
-- `KNOW_ME_OPENAI_EMBED_MODEL` — 与建索引、检索一致  
-- `KNOW_ME_OPENAI_CHAT_MODEL` — 对话模型 id  
-
-可选：`KNOW_ME_OPENAI_API_KEY`、RAG Top-K、子路径部署用的 `KNOW_ME_HTTP_BROWSER_PREFIX` / `KNOW_ME_HTTP_ROOT_PATH` 等。
-
-可选：通过环境变量 **`KNOW_ME_CORPUS_ROOT`** 指定语料根目录（未设置时默认为仓库下的 `corpus/`）。各 CLI 子命令仍可用 **`--corpus-root`** 覆盖。
-
-可选：通过 **`KNOW_ME_PERSONA_DIR`** 指定人设 Markdown 目录；未设置时默认为仓库根下的 **`persona/`**（本地自建，**默认 Git 忽略**）。克隆后从 **`persona.example/`** 复制或把该变量指向示例目录；字段说明见 **`persona.example/README.md`** 与下节。
-
-## 人设（persona）
-
-人设为 **`IDENTITY.md`** 与 **`SOUL.md`**，由本机维护；**`persona/` 默认不纳入 Git**（见 `.gitignore`），请勿将含真实身份与隐私边界的内容推送到远端。
-
-仓库内提供 **脱敏占位**（可提交）：**`persona.example/`**，说明见 **`persona.example/README.md`**。快速初始化本地人设目录：
-
-```bash
-mkdir -p persona
-cp persona.example/IDENTITY.md persona.example/SOUL.md persona/
-# 再按需编辑 persona/*.md
-```
-
-也可**不复制**，在环境中设置 **`KNOW_ME_PERSONA_DIR=persona.example`**（或在 `.env` 中配置）以直接加载示例文件、验证 RAG / Agent。
-
-`IDENTITY.md` 的 YAML 头中需设置 **`display_name`**（对外称呼），可选 **`aliases`**（用于问句弱信号）、**`session_opening`**（欢迎语，支持 `{owner_name}`）；正文描述「agent 是谁」。`SOUL.md` 描述三观与行为边界，正文中可用 **`{owner_name}`** 指代本人。
-
-## 语料库（corpus）
-
-语料为 **Markdown**，由本机维护；**`corpus/` 默认不纳入 Git**（见 `.gitignore`），请勿把含隐私或授权范围外的正文推送到远端。
-
-仓库内提供 **脱敏目录与占位正文**（可提交）：**`corpus.example/`**（四类子目录 + 示例 `.md`），说明见 **`corpus.example/README.md`**。快速初始化本地语料目录：
-
-```bash
-mkdir -p corpus
-cp -R corpus.example/about_me corpus.example/faq corpus.example/hr_faq corpus.example/hr_screening corpus/
-# 再按需编辑 corpus/**/*.md 或增删文件
-```
-
-也可**不复制**，直接对示例目录建索引以验证管道：
-
-```bash
-know-me build-index --corpus-root corpus.example
-```
-
-### 目录结构（一级子目录名固定）
-
-程序只扫描下列 **四类** 一级目录（缺失的目录会被跳过，不报错）。其下可任意嵌套子目录，只要扩展名为 **`.md`** 即会参与索引：
+## 系统架构 (Architecture)
 
 ```
-corpus/
-├── about_me/       # 自我介绍、履历要点、技术观点等
-├── faq/            # 通用常见问题
-├── hr_faq/         # HR / 招聘流程类 FAQ（可选）
-└── hr_screening/   # 初筛口径、地点/到岗等可公开说明（可选）
+                       +-----------------------------------+
+                       |    Markdown Corpus & Persona      |
+                       | (corpus/ & persona/ IDENTITY.md)  |
+                       +-----------------+-----------------+
+                                         |
+                                         v
++-------------------+          +-------------------+
+|  know-me CLI /    |          |  Chunking & Embed |
+|  POST /ingest     | -------> |  OpenAI Compatible|
++-------------------+          +---------+---------+
+                                         |
+                                         v
+                               +-------------------+
+                               |  ChromaDB Vector  |
+                               +---------+---------+
+                                         |
++-------------------+                    v
+|   User / Web UI   | <==== SSE =====+-----------------------+
+|   (GET / & /chat) | ===== HTTP ==> | FastAPI App & Agent   |
++-------------------+                | (LangChain + Tool RAG)|
+                                     +-----------------------+
 ```
 
-文件名与层级可自定，例如 `about_me/intro.md`、`faq/topics.md`。
+---
 
-### 正文与 YAML 头（可选）
-
-每个 `.md` 文件可在正文前使用 **YAML front matter**（`---` … `---`），正文写在第二个 `---` 之后。常用字段（均可省略；省略时部分字段会用文件修改日期或目录类型兜底，见 `know_me/index/splitting.py` 中 `build_chunk_metadata`）：
-
-| 字段 | 说明 |
-|------|------|
-| `date` | 文档日期（如 `2026-01-15`）；不写则用文件 mtime 的 UTC 日期 |
-| `topic` | 主题标签；不写则用该文件所属的一级目录名（`about_me` / `faq` 等） |
-| `audience` | 面向对象说明（字符串） |
-| `privacy_level` | 默认 `public` |
-
-### 构建向量索引
-
-1. 配置好 `.env` 中的 **`KNOW_ME_OPENAI_EMBED_MODEL`** 及 **`KNOW_ME_OPENAI_BASE_URL`**（以及按需的 API Key）。  
-2. 在语料就绪后执行：
-
-```bash
-know-me build-index
-```
-
-常用选项：
-
-- **`--corpus-root`**：语料根路径（默认 `corpus/` 或环境变量 `KNOW_ME_CORPUS_ROOT`）。  
-- **`--chroma-path`**：Chroma 持久化目录（默认 `data/chroma/`）。  
-- **`--reset`**：重建前清空已有集合（大改语料或需与磁盘完全一致时使用）。
-
-索引构建完成后，再使用 `query` / `chat` / `serve`；**嵌入模型 id 须与建索引时一致**，否则检索质量会异常。
-
-## 快速开始
+## 快速开始 (Quickstart)
 
 ### 方式 A：Docker Compose 快速启动（推荐）
 
+仓库已内置脱敏示例语料（`corpus.example/`）与示例人设（`persona.example/`），克隆即可直接体验：
+
 ```bash
-# 1. 构建镜像并后台启动服务（自动加载 corpus.example 与 persona.example）
+# 1. 复制环境配置
+cp .env.example .env
+# 编辑 .env 配置你的 OPENAI_BASE_URL、CHAT_MODEL 与 EMBED_MODEL
+
+# 2. 构建镜像并后台启动服务
 docker compose build
 docker compose up -d
 
-# 2. 检查健康状态（HTTP 200）
+# 3. 检查健康状态（HTTP 200）
 curl http://127.0.0.1:8000/health
 
-# 3. 停止服务
+# 4. 浏览器访问 Web 聊天界面
+# 打开 http://127.0.0.1:8000/
+
+# 5. 停止容器
 docker compose down
 ```
 
-服务启动后，可在浏览器打开 `http://127.0.0.1:8000/` 访问 Web 聊天界面。
-
 ### 方式 B：本地 Python 环境
 
-默认语料目录为 **`corpus/`**，向量数据目录为 **`data/chroma/`**（首次索引会自动创建）。若尚未准备个人语料，可先使用上一节 **`corpus.example/`** 的复制或 `--corpus-root corpus.example`。
-
 ```bash
-# 1. 构建向量索引（需嵌入模型可用）
-know-me build-index
+# 1. 创建并激活虚拟环境 (Python >= 3.10)
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
-# 2. 单次问答（默认流式输出正文到 stdout）
-know-me query "你的问题"
+# 2. 安装可编辑依赖
+pip install -e .
 
-# 3. 终端多轮对话（Agent + 检索工具）
+# 3. 复制配置
+cp .env.example .env
+
+# 4. 基于示例语料构建向量索引（需确保嵌入模型已配置且可用）
+know-me build-index --corpus-root corpus.example
+
+# 5. 单次问答测试（流式打印至终端）
+know-me query "请做个自我介绍"
+
+# 6. 终端交互式多轮对话
 know-me chat
 
-# 4. HTTP 服务：浏览器打开 http://127.0.0.1:8000/ ，API 文档见 /docs
+# 7. 启动 HTTP 服务与 Web 界面（浏览器打开 http://127.0.0.1:8000/ ，API 文档位于 /docs）
 know-me serve --host 127.0.0.1 --port 8000
 ```
 
-若语料或 Chroma 路径与默认不同，可为各子命令传入 `--corpus-root`、`--chroma-path`。
+---
 
-## HTTP 服务要点
+## 配置说明 (Configuration)
 
-- **`GET /`** — Web 聊天界面（与 API 同源）  
-- **`GET /health`** — 健康检查  
-- **`POST /chat`** — 多轮对话（默认 SSE 流式）  
-- **`POST /ingest`** — 触发索引构建（需配置 ingest 密钥时启用）  
-- **`POST /feedback`** — 可选反馈落盘（见 `.env.example`）  
+复制 `.env.example` 为 `.env` 后进行调整，核心配置项如下：
 
-应用部署在**反向代理子路径**下时，请按 `.env.example` 与 `know_me/api/app.py` 文档字符串配置 `KNOW_ME_HTTP_BROWSER_PREFIX`（及必要时 `KNOW_ME_HTTP_ROOT_PATH`），避免前端请求打到错误路径。
+| 环境变量 | 必填 | 默认值 | 说明 |
+| :--- | :---: | :--- | :--- |
+| `KNOW_ME_OPENAI_BASE_URL` | 是 | `http://127.0.0.1:1234/v1` | 兼容 OpenAI 协议的接口根地址（须包含 `/v1`） |
+| `KNOW_ME_OPENAI_EMBED_MODEL` | 是 | - | 向量嵌入模型标识（建索引与检索时须严格一致） |
+| `KNOW_ME_OPENAI_CHAT_MODEL` | 是 | - | 对话推理模型标识 |
+| `KNOW_ME_OPENAI_API_KEY` | 否 | `""` | 模型服务 API Key（本地 LM Studio 等通常可留空） |
+| `KNOW_ME_CORPUS_ROOT` | 否 | `corpus` | 语料根目录路径 |
+| `KNOW_ME_PERSONA_DIR` | 否 | `persona` | 人设配置目录（需包含 `IDENTITY.md` 和 `SOUL.md`） |
+| `KNOW_ME_RESUME_BROWSER_URL`| 否 | `""` | 聊天页「简历」按钮跳转外链（**默认留空，不预设个人域名**） |
+| `KNOW_ME_INGEST_API_KEY` | 否 | `""` | `POST /ingest` 鉴权密钥（未设置时接口返回 503 保护数据） |
+| `KNOW_ME_HTTP_BROWSER_PREFIX` | 否 | `""` | 反向代理挂载在子路径时的外部访问前缀（如 `/knowme`） |
+| `KNOW_ME_DISCLAIMER` | 否 | - | 自定义对外免责声明文案 |
 
-## 评测（eval）
+---
 
-评测输入为 **JSONL**（每行一个 JSON 用例），默认 CLI 参数为 **`eval/cases.jsonl`**，该目录由本机维护；**`eval/` 默认不纳入 Git**（见 `.gitignore`），勿将含真实问句或隐私期望的用例推送到远端。克隆后请在本地自建 `eval/` 并编写或拷贝用例文件。
+## 语料与人设定制 (Customizing Persona & Corpus)
 
-仓库内提供 **脱敏格式示例**（可提交）：**`eval.example/cases.sample.jsonl`**，说明见 **`eval.example/README.md`**。快速初始化本地评测文件：
-
+### 1. 人设配置 (`persona/`)
+本地人设目录由 `IDENTITY.md` 与 `SOUL.md` 构成：
 ```bash
-mkdir -p eval && cp eval.example/cases.sample.jsonl eval/cases.jsonl
-# 再按个人语料改写 question / expect_keywords
+mkdir -p persona
+cp persona.example/IDENTITY.md persona.example/SOUL.md persona/
+# 编辑 persona/*.md 填写真实或定制的人设与边界
 ```
+- `IDENTITY.md`：定义 `display_name`（称呼）、`aliases`（别名）、`session_opening`（欢迎语）及身份经历。
+- `SOUL.md`：设定价值观、敏感话题拒答策略及行为边界（正文中支持 `{owner_name}` 变量插值）。
 
-也可直接指定样例路径（仍需已完成 `build-index` 且模型可用）：
+### 2. 语料库目录结构 (`corpus/`)
+程序会自动递归扫描以下四类一级子目录下的所有 `.md` 文件：
+```
+corpus/
+├── about_me/       # 个人背景、经历要点、专业技能、技术哲学
+├── faq/            # 常见问题与回答
+├── hr_faq/         # HR/招聘流程类常见问答（可选）
+└── hr_screening/   # 初筛口径、到岗时间、工作形式等说明（可选）
+```
+修改语料后，只需重新执行 `know-me build-index` 即可刷新向量数据。
+
+---
+
+## HTTP 接口与 Web 界面
+
+- **`GET /`**：内置 Web 聊天页（支持 Markdown 渲染、打字机流式输出、头像展示及简历跳转）。
+- **`GET /health`**：健康检查探针（用于容器与编排健康监测）。
+- **`POST /chat`**：多轮会话接口，默认返回 SSE（Server-Sent Events）事件流。
+- **`POST /ingest`**：触发后台语料重新切分与向量索引重建（需在 Headers 携带 `Authorization: Bearer <KNOW_ME_INGEST_API_KEY>`）。
+- **`POST /feedback`**：接收用户反馈并记录至 JSONL（需开启 `KNOW_ME_FEEDBACK_ENABLED=1`）。
+
+---
+
+## 生产安全与部署建议 (Security Notes)
+
+> 详细安全策略与指南请参阅 [SECURITY.md](SECURITY.md)。
+
+1. **反向代理与速率限制（Rate Limiting & WAF）**：
+   - 框架本身未内置高并发分布式令牌桶限流。**公网暴露时必须前置 Nginx / Cloudflare / WAF**，严格限制单个 IP / 用户的请求频率，防止 LLM Token 滥用和资源耗尽攻击。
+2. **保护重建索引接口 (`POST /ingest`)**：
+   - 生产环境中务必配置 `KNOW_ME_INGEST_API_KEY`，或在网关层禁止外网访问 `/ingest` 路由。
+3. **保护个人隐私**：
+   - 严禁将含有未公开隐私的真实 `corpus/` 或 `persona/` 提交到公开 Git 仓库。
+
+---
+
+## 质量评测 (Evaluation)
+
+项目提供轻量级端到端 RAG 回归评测工具：
 
 ```bash
+# 使用脱敏示例用例运行评测
 know-me eval --cases eval.example/cases.sample.jsonl
-# 或（使用本地 eval 副本时）：
+
+# 使用本地自建用例
+mkdir -p eval && cp eval.example/cases.sample.jsonl eval/cases.jsonl
 know-me eval --cases eval/cases.jsonl
 ```
 
-可通过 **`--cases`** 指向任意路径，用 **`--out`** 指定报告 JSON 输出路径；详细字段见 `know_me/observability/eval_run.py`。
+---
 
-## 仓库结构（节选）
+## 路线图与社区文档 (Docs & Community)
 
-| 路径 | 说明 |
-|------|------|
-| `know_me/` | Python 包：索引管道、RAG、Agent、API、CLI |
-| `corpus.example/` | 语料目录与脱敏占位 `.md`（可随仓库同步） |
-| `corpus/` | 个人语料（本地自建；默认 Git 忽略，不随仓库同步） |
-| `persona.example/` | 人设 Markdown 脱敏样例与说明（可随仓库同步） |
-| `persona/` | 人设 `IDENTITY.md` / `SOUL.md`（本地自建；默认 Git 忽略） |
-| `data/` | 向量库、反馈日志等（本地生成；默认 Git 忽略） |
-| `eval.example/` | 评测 JSONL 脱敏样例与说明（可随仓库同步） |
-| `eval/` | 评测 JSONL 与报告输出（本地；默认 Git 忽略） |
+- 🗺️ **项目路线图**：查看 [docs/ROADMAP.md](docs/ROADMAP.md) 了解混合检索、内置限流中间件与多向量库适配规划。
+- 🤝 **参与贡献**：阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 了解代码规范、测试运行与 PR 提交说明。
+- 🔒 **安全政策**：阅读 [SECURITY.md](SECURITY.md) 了解漏洞提报通道与生产配置建议。
+- 📜 **变更日志**：查阅 [CHANGELOG.md](CHANGELOG.md) 获取各版本更新历史。
+- ⚖️ **免责声明**：阅读 [DISCLAIMER.md](DISCLAIMER.md) 了解 AI 数字分身的法律与人事非承诺边界。
 
-## 版本与许可证
+---
 
-- 包版本：`know-me version` 或 `know_me.__version__`（与 `pyproject.toml` 对齐）  
-- 许可证：[MIT](LICENSE)  
+## 演示站点与作者说明
+
+若希望体验作者本人的数字分身线上实际运行效果，可访问作者个人主页或演示站点（在各自的独立生产部署中，可通过环境变量 `KNOW_ME_RESUME_BROWSER_URL` 配置专属的个人简历外链，框架默认代码绝不包含任何硬编码个人域名）。
+
+---
+
+## 开源许可证 (License)
+
+本项目基于 [MIT License](LICENSE) 开源。
