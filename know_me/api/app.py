@@ -55,6 +55,14 @@ def _normalize_http_root(raw: str) -> str:
     return s if s.startswith("/") else "/" + s
 
 
+_DEFAULT_RESUME_BROWSER_URL = ""
+
+
+def _resume_browser_url() -> str:
+    raw = (os.environ.get("KNOW_ME_RESUME_BROWSER_URL") or "").strip()
+    return raw
+
+
 def _inject_web_index(http_root_browser: str) -> str:
     """在 `index.html` 中注入 `window.__KM_HTTP_ROOT`，便于子路径下 `fetch` 命中本服务。"""
     index = _WEB_UI_DIR / "index.html"

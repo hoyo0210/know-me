@@ -20,6 +20,9 @@ dependencies = [
   "uvicorn[standard]>=0.30",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 know-me = "know_me.cli:main"
 know-me-index = "know_me.cli:main"
