@@ -26,6 +26,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+[project.urls]
+Homepage = "https://github.com/example/know-me"
+Issues = "https://github.com/example/know-me/issues"
+
 [project.scripts]
 know-me = "know_me.cli:main"
 know-me-index = "know_me.cli:main"
@@ -34,4 +38,8 @@ know-me-index = "know_me.cli:main"
 where = ["."]
 
 [tool.setuptools.package-data]
-know_me = ["web_ui/*.html", "web_ui/resume_dist/**/*"]
+know_me = [
+  "web_ui/*.html",
+  "web_ui/*.png",
+  "web_ui/resume_dist/**/*",
+]
