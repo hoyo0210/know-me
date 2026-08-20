@@ -180,6 +180,7 @@ know-me eval --cases eval/cases.jsonl
 ## 路线图与社区文档 (Docs & Community)
 
 - 🗺️ **项目路线图**：查看 [docs/ROADMAP.md](docs/ROADMAP.md) 了解混合检索、内置限流中间件与多向量库适配规划。
+- ☁️ **阿里云部署（聊天 + 简历站 + 通义 API）**：[docs/deploy-aliyun.md](docs/deploy-aliyun.md)，示例见 [`deploy/`](deploy/)。
 - 🤝 **参与贡献**：阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 了解代码规范、测试运行与 PR 提交说明。
 - 🔒 **安全政策**：阅读 [SECURITY.md](SECURITY.md) 了解漏洞提报通道与生产配置建议。
 - 📜 **变更日志**：查阅 [CHANGELOG.md](CHANGELOG.md) 获取各版本更新历史。
