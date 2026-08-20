@@ -27,8 +27,8 @@ dependencies = [
 dev = ["pytest>=8.0"]
 
 [project.urls]
-Homepage = "https://github.com/example/know-me"
-Issues = "https://github.com/example/know-me/issues"
+Homepage = "https://github.com/hoyo0210/know-me"
+Issues = "https://github.com/hoyo0210/know-me/issues"
 
 [project.scripts]
 know-me = "know_me.cli:main"
