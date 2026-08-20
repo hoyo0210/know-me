@@ -127,6 +127,24 @@ know-me build-index
 
 ## 快速开始
 
+### 方式 A：Docker Compose 快速启动（推荐）
+
+```bash
+# 1. 构建镜像并后台启动服务（自动加载 corpus.example 与 persona.example）
+docker compose build
+docker compose up -d
+
+# 2. 检查健康状态（HTTP 200）
+curl http://127.0.0.1:8000/health
+
+# 3. 停止服务
+docker compose down
+```
+
+服务启动后，可在浏览器打开 `http://127.0.0.1:8000/` 访问 Web 聊天界面。
+
+### 方式 B：本地 Python 环境
+
 默认语料目录为 **`corpus/`**，向量数据目录为 **`data/chroma/`**（首次索引会自动创建）。若尚未准备个人语料，可先使用上一节 **`corpus.example/`** 的复制或 `--corpus-root corpus.example`。
 
 ```bash

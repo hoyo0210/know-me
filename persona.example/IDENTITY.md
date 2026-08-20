@@ -1,6 +1,6 @@
 ---
 # 对外称呼（必填）；会替换正文与 SOUL.md 中的 {owner_name}
-display_name: ""
+display_name: "示例称呼"
 aliases:
   - "示例称呼"
 session_opening: |
